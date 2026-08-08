@@ -244,7 +244,14 @@ async function loadProbeTargets() {
   const prev = sel.value;
   sel.innerHTML = d.targets.map(t => '<option>' + esc(t) + '</option>').join('');
   if (prev && d.targets.includes(prev)) sel.value = prev;
-  if (!d.targets.length) { $('#p-chart').innerHTML = '<div class="empty">还没有探测目标。用 -probe \'name=host\' 启动</div>'; return; }
+  if (!d.targets.length) {
+    // 提示要具体到"去哪个文件改",而不是一句"没有数据"——
+    // 空白图表让人以为程序坏了,明确的指引才知道下一步做什么。
+    $('#p-chart').innerHTML = '<div class="empty">' +
+      esc(d.hint || '还没有探测目标。编辑 /etc/ntop2ban/ping.list 或 tcp.list,每行一个目标,重启生效') +
+      '</div>';
+    return;
+  }
   await loadProbe();
 }
 

@@ -11,12 +11,10 @@ import (
 	"errors"
 	"flag"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,15 +31,15 @@ var version = "dev"
 
 func main() {
 	var (
-		addr    = flag.String("addr", ":8090", "HTTP 监听地址")
-		dataDir = flag.String("data-dir", "./ntop2ban-data", "数据目录(SQLite 库文件落这里)")
-		apiKey  = flag.String("api-key", "", "采样上报鉴权用的 X-API-Key(必填)")
-		days    = flag.Int("days", 40, "数据保留天数(采样与探测共用)")
-		iface   = flag.String("iface", "", "观测网卡。XDP 模式必须指定;留空则只能走 AF_PACKET 兼容模式")
-		sampleN = flag.Int("sampling", 100, "抽样率 1/N;1 表示全量")
-		prefer  = flag.String("datasource", "", "强制指定数据源:xdp-native | xdp-generic | af-packet;留空则自动降级")
-		noKnock = flag.Bool("no-knock", false, "不启动敲门守护(库里已配的序列不会生效)")
-		probes  = flag.String("probe", "", "探测目标,逗号分隔。格式 name=host 或 name=host:port(带端口即 TCP 探测)")
+		addr     = flag.String("addr", ":8090", "HTTP 监听地址")
+		dataDir  = flag.String("data-dir", "./ntop2ban-data", "数据目录(SQLite 库文件落这里)")
+		apiKey   = flag.String("api-key", "", "采样上报鉴权用的 X-API-Key(必填)")
+		days     = flag.Int("days", 40, "数据保留天数(采样与探测共用)")
+		iface    = flag.String("iface", "", "观测网卡。XDP 模式必须指定;留空则只能走 AF_PACKET 兼容模式")
+		sampleN  = flag.Int("sampling", 100, "抽样率 1/N;1 表示全量")
+		prefer   = flag.String("datasource", "", "强制指定数据源:xdp-native | xdp-generic | af-packet;留空则自动降级")
+		noKnock  = flag.Bool("no-knock", false, "不启动敲门守护(库里已配的序列不会生效)")
+		probeDir = flag.String("probe-dir", probe.DefaultDir, "探测目标清单目录(ping.list / tcp.list)")
 	)
 	flag.Parse()
 
@@ -94,10 +92,7 @@ func main() {
 
 	go retentionLoop(ctx, store, *days)
 
-	if targets := parseProbeTargets(*probes); len(targets) > 0 {
-		probe.NewRunner(store, nil).Run(ctx, targets)
-		log.Printf("链路探测:%d 个目标已启动", len(targets))
-	}
+	startProbes(ctx, store, handler, *probeDir)
 
 	go func() {
 		log.Printf("ntop2ban %s 监听 %s(数据 %s,保留 %d 天)", version, *addr, *dataDir, *days)
@@ -115,38 +110,49 @@ func main() {
 	}
 }
 
-// parseProbeTargets 解析 -probe 参数。
+// startProbes 从清单文件加载探测目标并启动。
 //
-// 格式 name=host 或 name=host:port。带端口即 TCP 探测(用连接建立耗时
-// 作为 RTT),否则 ICMP。解析失败的条目跳过并告警,不让整个程序起不来——
-// 一个写错的探测目标不该阻止采样与敲门这些更重要的功能。
-func parseProbeTargets(spec string) []probe.Target {
-	if spec == "" {
-		return nil
+// 探测随主程序一起启动,不需要单独的命令或参数——目标写在
+// /etc/ntop2ban/{ping.list,tcp.list} 里,`echo host >> ping.list` 就能加
+// 一个,这比在界面上点几下或写 SQL 都快。
+//
+// 清单为空(首次部署、或全部注释掉)时不是错误:界面上不显示探测视图,
+// 并提示用户去哪个文件里加目标。让服务因为"还没配探测"起不来是不可
+// 接受的。
+func startProbes(ctx context.Context, store *sqlite.Store, handler *web.Handler, dir string) {
+	created, err := probe.EnsureExampleFiles(dir)
+	if err != nil {
+		// 目录不可写(比如非 root 跑且 -probe-dir 指向 /etc)不该让服务
+		// 起不来:探测只是三个功能之一,流量与敲门仍然有用。
+		log.Printf("链路探测:无法准备清单目录 %s(探测不可用): %v", dir, err)
+		handler.ProbeHint = "无法读写清单目录 " + dir
+		return
 	}
-	var out []probe.Target
-	for _, item := range strings.Split(spec, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		name, hostport, ok := strings.Cut(item, "=")
-		if !ok || name == "" || hostport == "" {
-			log.Printf("探测目标 %q 格式无效(应为 name=host 或 name=host:port),已跳过", item)
-			continue
-		}
-		t := probe.Target{Name: name, Kind: "icmp", Host: hostport}
-		if host, portStr, err := net.SplitHostPort(hostport); err == nil {
-			port, perr := strconv.Atoi(portStr)
-			if perr != nil || port < 1 || port > 65535 {
-				log.Printf("探测目标 %q 端口无效,已跳过", item)
-				continue
-			}
-			t.Kind, t.Host, t.Port = "tcp", host, port
-		}
-		out = append(out, t)
+	for _, p := range created {
+		log.Printf("链路探测:已生成示例清单 %s(默认全部注释,去掉行首 # 并重启即生效)", p)
 	}
-	return out
+
+	targets, warnings, err := probe.LoadTargets(dir)
+	if err != nil {
+		log.Printf("链路探测:读取清单失败: %v", err)
+		handler.ProbeHint = "读取清单失败:" + err.Error()
+		return
+	}
+	for _, w := range warnings {
+		log.Printf("链路探测:%s", w)
+	}
+
+	if len(targets) == 0 {
+		hint := "还没有探测目标。编辑 " + filepath.Join(dir, probe.PingListName) +
+			"(ICMP)或 " + filepath.Join(dir, probe.TCPListName) + "(TCP),每行一个,重启生效"
+		log.Printf("链路探测:%s", hint)
+		handler.ProbeHint = hint
+		return
+	}
+
+	probe.NewRunner(store, nil).Run(ctx, targets)
+	log.Printf("链路探测:%d 个目标已启动(清单目录 %s)", len(targets), dir)
+	handler.ProbeHint = ""
 }
 
 // observeConfig 观测装配参数。

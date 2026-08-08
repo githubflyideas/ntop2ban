@@ -95,10 +95,24 @@ AF_PACKET 模式下敲门会自己开一个独立的精确捕获 socket,因为�
 但**没有搬它的存储层**——那边用 cgo 驱动,带进来会毁掉静态编译。
 探测结果落 ntop2ban 已有的那一个库,只是多几张表。
 
-```bash
-./ntop2ban -api-key k1 -probe 'idc-a=10.0.0.1,dns=8.8.8.8,web=example.com:443'
-# 不带端口 = ICMP 探测;带端口 = TCP 探测(用连接建立耗时作为 RTT)
+探测随主程序一起启动,没有独立的命令。目标写在清单文件里,格式与
+pingping 一致(从 pingping 迁过来可以直接拷原来的清单):
+
 ```
+/etc/ntop2ban/ping.list     # ICMP:  host      [名字] [pace=fast|normal|slow] [interval=秒]
+/etc/ntop2ban/tcp.list      # TCP:   host:port [名字] [pace=...]              [interval=秒]
+```
+
+```bash
+echo '192.168.1.1  网关  pace=fast' >> /etc/ntop2ban/ping.list
+echo '10.0.0.5:443  API网关  interval=30' >> /etc/ntop2ban/tcp.list
+# 重启生效
+```
+
+用文件而不是数据库表:探测目标是运维手写的东西,`echo host >> ping.list`
+比在界面上点几下或写 SQL 都快。首次启动会生成带注释的示例(全部注释掉,
+不会擅自去探测某个示例主机)。清单为空时界面上的探测页会提示去哪个
+文件加目标,而不是显示一张空图——空图让人以为程序坏了。
 
 保留 pingping 的核心取舍:**存分布而不是均值**。一轮 20 个包,记下
 min/p50/p90/p99/max。均值会把"一半包 5ms、一半包 500ms"和"所有包 250ms"
@@ -117,7 +131,7 @@ min/p50/p90/p99/max。均值会把"一半包 5ms、一半包 500ms"和"所有包
 | `-datasource` | 空(自动降级) | 强制指定:`xdp-native` / `xdp-generic` / `af-packet` |
 | `-data-dir` | `./ntop2ban-data` | 数据目录 |
 | `-days` | `40` | 数据保留天数(采样与探测共用) |
-| `-probe` | 空 | 探测目标,逗号分隔。`name=host` 走 ICMP,`name=host:port` 走 TCP |
+| `-probe-dir` | `/etc/ntop2ban` | 探测清单目录(`ping.list` / `tcp.list`) |
 | `-no-knock` | 关 | 不启动敲门 |
 
 ## 从源码构建

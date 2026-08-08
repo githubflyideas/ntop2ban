@@ -54,6 +54,11 @@ type Handler struct {
 	// 在哪一级上,否则会把"统计偏低"误判成"流量真的少"。
 	DataSourceLabel string
 
+	// ProbeHint 非空时表示探测未启用,内容是给用户的具体指引
+	// (去哪个文件加目标)。界面据此在探测页显示提示而不是空白图表——
+	// 空白图表让人以为程序坏了,明确的提示才能让人知道下一步做什么。
+	ProbeHint string
+
 	// OnSequenceApproved 序列审批通过后的回调,用于热更新 XDP 匹配 map
 	// 与状态机。为空表示不热更新(需要重启才生效)。
 	OnSequenceApproved func(seq knock.Sequence, seqID int64)
@@ -112,6 +117,7 @@ func (h *Handler) apiOverview(w http.ResponseWriter, r *http.Request, u sessionE
 		"user":        u.username,
 		"role":        u.role,
 		"data_source": h.DataSourceLabel,
+		"probe_hint":  h.ProbeHint,
 	}
 
 	if stats, err := h.store.Stats(ctx); err == nil {
@@ -191,7 +197,7 @@ func (h *Handler) apiProbeTargets(w http.ResponseWriter, r *http.Request, u sess
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"targets": names})
+	writeJSON(w, http.StatusOK, map[string]any{"targets": names, "hint": h.ProbeHint})
 }
 
 // apiProbeRounds 返回某目标的探测轮次,含 RTT 分布与突发标记。
