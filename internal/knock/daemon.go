@@ -51,6 +51,14 @@ type DaemonConfig struct {
 	Logger     *log.Logger
 }
 
+// logger 返回配置里的 logger,没配就用默认的。
+func (c DaemonConfig) logger() *log.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return log.Default()
+}
+
 func NewDaemon(cfg DaemonConfig) (*Daemon, error) {
 	if err := cfg.Sequence.Validate(); err != nil {
 		return nil, err
@@ -58,10 +66,7 @@ func NewDaemon(cfg DaemonConfig) (*Daemon, error) {
 	if cfg.Opener == nil {
 		return nil, errors.New("knock: 必须提供 Opener,否则敲门成功也不会放行任何端口")
 	}
-	lg := cfg.Logger
-	if lg == nil {
-		lg = log.Default()
-	}
+	lg := cfg.logger()
 
 	d := &Daemon{
 		iface:    cfg.Iface,

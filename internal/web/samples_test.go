@@ -8,8 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/githubflyideas/ntop2ban/internal/knock"
 	"github.com/githubflyideas/ntop2ban/internal/model"
+	"github.com/githubflyideas/ntop2ban/internal/probe"
+	"github.com/githubflyideas/ntop2ban/internal/storage/sqlite"
 )
 
 var errAppendFailed = errors.New("append failed")
@@ -30,10 +34,7 @@ func (f *fakeStorage) Query(ctx context.Context, q model.Query) (model.Result, e
 	return model.Result{}, nil
 }
 func (f *fakeStorage) Retention(ctx context.Context, p model.RetentionPolicy) error { return nil }
-func (f *fakeStorage) Stats(ctx context.Context) (model.StorageStats, error) {
-	return model.StorageStats{}, nil
-}
-func (f *fakeStorage) Close() error { return nil }
+func (f *fakeStorage) Close() error                                                 { return nil }
 
 func validReport() SampleReport {
 	return SampleReport{
@@ -158,4 +159,43 @@ func TestReceiveSamples_RejectsNonPOST(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("want 405, got %d", rec.Code)
 	}
+}
+
+// 下面这些方法把 fakeStorage 补全成 web.Store。
+//
+// 全部返回零值:samples_test.go 只测采样接收端点的鉴权/解码/转换,
+// 不关心其余能力。补全接口而不是拆分接口,是因为 Store 就该是
+// "web 层需要的全部存储能力"这一个概念——拆成五个小接口会让
+// NewHandler 的签名变成一串参数,可读性反而更差。
+func (f *fakeStorage) Stats(ctx context.Context) (model.StorageStats, error) {
+	return model.StorageStats{Backend: "fake"}, nil
+}
+func (f *fakeStorage) Authenticate(ctx context.Context, u, p string) (sqlite.User, error) {
+	return sqlite.User{}, sqlite.ErrBadCredentials
+}
+func (f *fakeStorage) ListUsers(ctx context.Context) ([]sqlite.User, error)     { return nil, nil }
+func (f *fakeStorage) CreateUser(ctx context.Context, u, p, r string) error     { return nil }
+func (f *fakeStorage) WriteAudit(ctx context.Context, a, ac, t, d string) error { return nil }
+func (f *fakeStorage) ListAudit(ctx context.Context, limit int) ([]sqlite.AuditEntry, error) {
+	return nil, nil
+}
+func (f *fakeStorage) SubmitSequence(ctx context.Context, seq knock.Sequence, by, note string) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStorage) ApproveSequence(ctx context.Context, id int64, by string) error { return nil }
+func (f *fakeStorage) RejectSequence(ctx context.Context, id int64, by, note string) error {
+	return nil
+}
+func (f *fakeStorage) ActiveSequence(ctx context.Context) (sqlite.SequenceRecord, error) {
+	return sqlite.SequenceRecord{}, sqlite.ErrNoActiveSequence
+}
+func (f *fakeStorage) ListSequences(ctx context.Context, limit int) ([]sqlite.SequenceRecord, error) {
+	return nil, nil
+}
+func (f *fakeStorage) ListGrants(ctx context.Context, limit int) ([]sqlite.GrantRecord, error) {
+	return nil, nil
+}
+func (f *fakeStorage) ProbeTargets(ctx context.Context) ([]string, error) { return nil, nil }
+func (f *fakeStorage) ProbeRounds(ctx context.Context, target string, since, until time.Time, limit int) ([]probe.Round, error) {
+	return nil, nil
 }

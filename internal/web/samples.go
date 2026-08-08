@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/githubflyideas/ntop2ban/internal/model"
-	"github.com/githubflyideas/ntop2ban/internal/storage"
 )
 
 // FlowSample 是单条流统计,字段与 xdp-ban 的 cmd/xdp-sampler.FlowSample
@@ -43,24 +42,6 @@ type SampleReport struct {
 	NetflowTarget string         `json:"netflow_target,omitempty"`
 	Flows         []FlowSample   `json:"flows"`
 	GlobalStat    map[string]any `json:"global_stat"`
-}
-
-// Handler 持有接收端点依赖的存储与鉴权配置。
-type Handler struct {
-	store  storage.FlowStorage
-	apiKey string
-}
-
-// NewHandler 构造接收端点 handler。apiKey 为空时校验会拒绝一切请求——
-// 调用方必须显式配置密钥,不给一个"changeme"式的默默可用默认值,
-// 避免部署时忘记设置却以为已经启用了鉴权。
-func NewHandler(store storage.FlowStorage, apiKey string) *Handler {
-	return &Handler{store: store, apiKey: apiKey}
-}
-
-// RegisterRoutes 注册 /api/v1/samples 端点。
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/v1/samples", h.receiveSamples)
 }
 
 // receiveSamples 接收 xdp-sampler 的周期上报,转换为 model.Flow 后
