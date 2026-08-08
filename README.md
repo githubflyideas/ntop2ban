@@ -2,91 +2,90 @@
 
 **Watch the Top, Ban the Bad.**
 
-接收 eBPF 采样上报，持久化到内嵌 ClickHouse，做流量可视化与一键封禁。
+小企业向的流量观测与访问控制。一个二进制,一个 SQLite 文件,scp 上去就能跑。
 
 ---
 
 ## 这是什么
 
-ntop2ban 是 [xdp-ban](https://github.com/githubflyideas/xdp-ban) 的流量可视化子项目。
-xdp-ban 的 `xdp-sampler` 在镜像口上做 1/N 采样，把聚合后的流记录周期性上报；
-xdp-ban 自己只把这些数据放在内存环形缓冲里（重启即丢，够实时仪表板用），
-ntop2ban 则把同一份上报**持久化**下来，支撑历史查询、趋势图与多维分析。
+ntop2ban 把三件事装进同一个程序:
 
-协议层面完全复用 xdp-ban 现有的上报格式（`POST /api/v1/samples`，`X-API-Key` 鉴权），
-**不需要修改 xdp-ban / xdp-sampler 任何代码**——把 `xdp-sampler -url` 指向 ntop2ban 即可。
+- **流量观测** —— eBPF 采样,看清谁在打你的主机
+- **敲门授权(knock)** —— 按预设序列敲门才放行 SSH,让扫描器看不到端口
+- **链路探测** —— 周期性 ICMP/TCP 探测,延迟与丢包的分布图(源自 [pingping](https://github.com/githubflyideas/pingping))
 
-## 部署形态：拷贝即用
+配上审批与审计:序列的变更需要走审批,成功授权全部留痕。
 
-ClickHouse 不是需要你另行安装的外部服务。发布包里 `ntop2ban` 与官方
-`clickhouse` 静态二进制放在同一目录，ntop2ban 启动时把它作为**子进程**
-拉起并托管其生命周期（生成配置、健康检查、退出收尾），数据落在本地目录。
+与 [xdp-ban](https://github.com/githubflyideas/xdp-ban) 的分工:xdp-ban 处理大流量镜像分析
+(ClickHouse 分层聚合在那边),ntop2ban 走轻量路线。采样流量、敲门序列、
+审批审计、探测结果都落**同一个 `.db` 文件**,拷走那个文件就是完整备份。
 
-```
-ntop2ban-linux-amd64/
-├── ntop2ban      # 主程序(~19MB)
-└── clickhouse    # 官方静态二进制,由 ntop2ban 托管
-```
+## 快速开始
 
 ```bash
-./ntop2ban -api-key <与 sampler 一致的密钥>
-# 默认监听 :8090,数据落 ./ntop2ban-data/
+./ntop2ban -api-key <你的密钥>
+# 监听 :8090,数据落 ./ntop2ban-data/,采样保留 40 天
 ```
 
-然后让采样器把数据打过来：
+## 敲门(knock)
+
+序列由用户在平台上设定,混合 TCP 与 ICMP,**不用 UDP**——很多客户端出口
+环境发不出 UDP。整个序列必须在 **1 分钟内**完成。
+
+一个典型序列 `TCP 9001 → ICMP 56 → TCP 9003 → ICMP 90`,敲门就是四条
+系统自带命令,不需要任何自制客户端:
 
 ```bash
-sudo ./xdp-sampler -d eth1 -url http://<ntop2ban 主机>:8090/api/v1/samples -n 4096 -key <API_KEY>
+nc -z -w1 <host> 9001      # 第 1 步
+ping -s 56 -c 1 <host>     # 第 2 步
+nc -z -w1 <host> 9003      # 第 3 步
+ping -s 90 -c 1 <host>     # 第 4 步
+# 成功后 60 秒内可连接 SSH,只对你这个来源 IP 放行
 ```
+
+界面直接给出可复制的命令,不用自己拼。
+
+设计取舍值得说明:**暗号是固定的,不做轮换。** 曾经设计过按时间窗
+用 HMAC 轮换 ICMP 包长,否决了——你得先去某处查当前值才能敲门,而那个
+"某处"往往也在敲门保护之后,鸡生蛋。接受的代价是被抓包后可重放,但真正
+要防的是全网扫描器,它永远猜不中这个序列;而能在链路上抓包的对手已经是
+中间人,敲门本来也救不了,那时靠的是 SSH 自身的密钥认证。
+
+**只记成功,不记失败。** 敲错的包就是互联网噪声,记下来只会淹没审计日志。
+
+审批不是实时闸门:它管的是"序列定义"这份配置的变更(改哪些端口、
+哪些 ICMP 长度),守护进程始终按当前生效的那版工作,不会卡在等审批上。
 
 ## 启动参数
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `-api-key` | —（必填） | 上报鉴权密钥，须与 `xdp-sampler -key` 一致。留空会拒绝一切上报，因此启动时直接报错退出而不是静默起来收不到数据 |
+| `-api-key` | —(必填) | 采样上报鉴权密钥。留空会拒绝一切上报,因此启动时直接报错退出,而不是静默起来收不到数据 |
 | `-addr` | `:8090` | HTTP 监听地址 |
-| `-storage` | `clickhouse` | 存储后端：`clickhouse`（托管内嵌）或 `sqlite`（兜底） |
-| `-data-dir` | `./ntop2ban-data` | 数据目录。托管 ClickHouse 的库文件、SQLite 的 `.db` 都落这里 |
-| `-clickhouse-bin` | 同目录 `./clickhouse` | clickhouse 静态二进制路径 |
-
-## 两种存储后端
-
-| 模式 | 能力 | 适用 |
-|---|---|---|
-| **clickhouse**（默认） | 完整：三层 schema（明细表 + 分钟级物化视图 + 小时/天 rollup）、多维聚合、历史趋势 | 推荐，开箱即用，无需单独装服务 |
-| **sqlite** | 降级：能收能存能做基础 Top-N 与按时间清理，无 rollup / 无多维聚合 | 连一个托管子进程都不想要的场景 |
-
-两者实现同一个 `FlowStorage` 接口（`Append`/`Query`/`Aggregate`/`Retention`/`Compact`/`Stats`），
-切换后端时上层业务代码零改动。SQLite 后端的 `Stats()` 会返回 `Degraded: true`，
-前端据此隐藏依赖聚合能力的展示入口。
-
-> 注意：这里的 SQLite 是**流量存储**的兜底后端，与 xdp-ban 审批流（Circulate）
-> 用的那个 SQLite 库是两回事，互不影响。
+| `-data-dir` | `./ntop2ban-data` | 数据目录 |
+| `-days` | `40` | 采样数据保留天数 |
 
 ## 从源码构建
 
 ```bash
-make build              # 构建 ntop2ban 到 bin/
-make test               # 单元测试(不需要 ClickHouse)
-make fetch-clickhouse   # 下载 clickhouse 静态二进制到 bin/
-make test-integration   # 集成测试(自动用 bin/clickhouse 起一个实例)
-make release            # 交叉编译 linux/{amd64,arm64} 到 dist/
+make build     # 构建 ./ntop2ban
+make test      # 全部测试
+make check     # vet + test
+make release   # 交叉编译 linux/{amd64,arm64} 到 dist/
 ```
 
-集成测试通过环境变量显式开启，没设置就跳过，这样普通 `go test ./...`
-不会因为缺少外部依赖而失败：
-
-```bash
-NTOP2BAN_CH_TEST_ADDR=127.0.0.1:9000 go test ./internal/storage/clickhouse/...
-```
+`CGO_ENABLED=0` 是硬约束:SQLite 用 `modernc.org/sqlite`(纯 Go),
+所以能静态编译、拷过去就跑。
 
 ## 路线图
 
-本仓库对应 xdp-ban 架构方案 v0.3 的阶段二至阶段四：
-
-- [x] 阶段二：`FlowStorage` 接口 + ClickHouse 实现 + 采样接收端点
-- [ ] 阶段三：写入时富化（GeoIP / ASN / IANA 服务名）
-- [ ] 阶段四：展示层（Top Clients/Servers、Services 分布、Traffic Timeline、Country/ASN 视图；点击 IP 直接发起封禁申请）
+- [x] 采样存储层(SQLite)与接收端点
+- [x] 敲门序列状态机与持久化(序列版本 + 成功授权记录)
+- [ ] 敲门捕获层(AF_PACKET raw socket + cBPF 过滤,纯 Go,不需要 clang)与放行动作
+- [ ] 内化 eBPF 采样(目前接收 xdp-sampler 上报;目标是自己 attach 网卡)
+- [ ] 审批流与角色权限(借鉴 xdp-ban 的四眼/审计设计,admin 超级权限)
+- [ ] pingping 探测能力搬入(丢弃其 cgo 存储层,共用同一个库)
+- [ ] 展示层(Top Clients/Servers、流量趋势、探测分布图;点击 IP 发起封禁)
 
 ## License
 

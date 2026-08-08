@@ -69,30 +69,15 @@ type Result struct {
 	Total int // 满足筛选条件的总行数(用于分页/展示"共 N 条"),Limit 生效时 Total 可能大于 len(Rows)
 }
 
-// Window 描述聚合的时间窗口粒度,对应 v0.3 文档里"明细表 + 分钟级物化
-// 视图 + 小时/天级 rollup"的三层 schema。
-type Window struct {
-	Since       time.Time
-	Until       time.Time
-	Granularity string // "minute" | "hour" | "day"
-}
-
-// RetentionPolicy 描述数据保留策略,按粒度分别设置留存时长。
-// 明细表(原始 Flow 记录)通常留存时间远短于 rollup 表。
+// RetentionPolicy 描述数据保留策略。
 type RetentionPolicy struct {
-	DetailTTL time.Duration // 明细表留存时长
-	MinuteTTL time.Duration
-	HourTTL   time.Duration
-	DayTTL    time.Duration // 0 = 永久保留
+	DetailTTL time.Duration // 采样明细留存时长;0 = 不清理
 }
 
 // StorageStats 存储层运行状态,供运维/仪表板展示。
 type StorageStats struct {
-	Backend      string // "clickhouse" | "sqlite"
+	Backend      string // "sqlite"
 	TotalRows    int64
 	OldestRecord time.Time
 	NewestRecord time.Time
-	// Degraded 为 true 时表示当前后端不支持完整功能(SQLite 兜底模式下
-	// 无历史趋势图、无 GeoIP 维度分析),供前端据此隐藏对应入口。
-	Degraded bool
 }

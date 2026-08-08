@@ -29,9 +29,7 @@ func (f *fakeStorage) Append(ctx context.Context, batch []model.Flow) error {
 func (f *fakeStorage) Query(ctx context.Context, q model.Query) (model.Result, error) {
 	return model.Result{}, nil
 }
-func (f *fakeStorage) Aggregate(ctx context.Context, w model.Window) error          { return nil }
 func (f *fakeStorage) Retention(ctx context.Context, p model.RetentionPolicy) error { return nil }
-func (f *fakeStorage) Compact(ctx context.Context) error                            { return nil }
 func (f *fakeStorage) Stats(ctx context.Context) (model.StorageStats, error) {
 	return model.StorageStats{}, nil
 }

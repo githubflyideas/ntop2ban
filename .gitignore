@@ -1,13 +1,8 @@
 # 构建产物
-bin/
+/ntop2ban
 dist/
 
-# clickhouse 静态二进制(200MB+,由 make fetch-clickhouse 下载,不入库)。
-# 必须写成 /clickhouse(锚定仓库根),否则会连 internal/storage/clickhouse/
-# 这个源码目录一起忽略掉。
-/clickhouse
-
-# 运行时数据目录
+# 运行时数据
 ntop2ban-data/
 *.db
 *.db-wal

@@ -193,33 +193,6 @@ func TestRetention_DeletesOldRows(t *testing.T) {
 	}
 }
 
-// TestStats_ReportsDegraded 是 SQLite 后端特有的关键断言:Stats 必须
-// 把 Degraded 置为 true。这是前端判断"当前是兜底模式、要隐藏历史
-// 趋势/多维聚合入口"的唯一信号,不能漏。
-func TestStats_ReportsDegraded(t *testing.T) {
-	s := openTempStore(t)
-	ctx := context.Background()
-	now := time.Now().Truncate(time.Second)
-
-	if err := s.Append(ctx, []model.Flow{sampleFlow("1.1.1.1", "2.2.2.2", 1, 100, now)}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-
-	stats, err := s.Stats(ctx)
-	if err != nil {
-		t.Fatalf("Stats: %v", err)
-	}
-	if stats.Backend != "sqlite" {
-		t.Errorf("want backend=sqlite, got %q", stats.Backend)
-	}
-	if !stats.Degraded {
-		t.Error("SQLite 兜底模式必须把 Degraded 置为 true,否则前端会错误地展示不可用的聚合功能入口")
-	}
-	if stats.TotalRows != 1 {
-		t.Errorf("want TotalRows=1, got %d", stats.TotalRows)
-	}
-}
-
 // TestStats_EmptyStore 空库时 min/max 为 NULL,Stats 不应报错——
 // 服务刚启动、还没收到任何上报时会走这条路径。
 func TestStats_EmptyStore(t *testing.T) {
@@ -233,10 +206,10 @@ func TestStats_EmptyStore(t *testing.T) {
 	}
 }
 
-// TestAggregateAndCompact_NoError 兜底模式下 Aggregate 是空操作、
-// Compact 走 VACUUM,两者都不应报错——后台调度对两种后端用同一套
-// 调用逻辑,SQLite 这边不能因为"不支持"就返回 error。
-func TestAggregateAndCompact_NoError(t *testing.T) {
+// TestStats_ReportsBackendAndRows 替代原先那个 Degraded 断言:
+// 现在只有一个后端,没有"降级"概念可言,但 Stats 仍要正确反映
+// backend 名与行数——仪表板靠它判断"数据在正常流入"。
+func TestStats_ReportsBackendAndRows(t *testing.T) {
 	s := openTempStore(t)
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
@@ -244,10 +217,30 @@ func TestAggregateAndCompact_NoError(t *testing.T) {
 	if err := s.Append(ctx, []model.Flow{sampleFlow("1.1.1.1", "2.2.2.2", 1, 100, now)}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if err := s.Aggregate(ctx, model.Window{Granularity: "hour"}); err != nil {
-		t.Fatalf("Aggregate should be a no-op, got: %v", err)
+	stats, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
 	}
-	if err := s.Compact(ctx); err != nil {
-		t.Fatalf("Compact: %v", err)
+	if stats.Backend != "sqlite" {
+		t.Errorf("want backend=sqlite, got %q", stats.Backend)
+	}
+	if stats.TotalRows != 1 {
+		t.Errorf("want TotalRows=1, got %d", stats.TotalRows)
+	}
+}
+
+// TestOpen_EnablesIncrementalAutoVacuum 守住一个容易静默失效的设置:
+// auto_vacuum 只能在建表之前设定,一旦库里有了表就改不动了。若这个
+// pragma 没生效,Retention 里的 incremental_vacuum 就是空转,采样文件
+// 会一直单调增长——而且不会有任何报错提示。
+func TestOpen_EnablesIncrementalAutoVacuum(t *testing.T) {
+	s := openTempStore(t)
+	var mode int
+	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		t.Fatalf("query auto_vacuum: %v", err)
+	}
+	// 2 = INCREMENTAL(0=NONE, 1=FULL)
+	if mode != 2 {
+		t.Errorf("want auto_vacuum=2(INCREMENTAL), got %d —— Retention 的空间回收会静默失效", mode)
 	}
 }

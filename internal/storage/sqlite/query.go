@@ -136,20 +136,13 @@ func (s *Store) Query(ctx context.Context, q model.Query) (model.Result, error) 
 	return result, nil
 }
 
-// Aggregate 在兜底模式下是空操作:SQLite 版本不维护分钟/小时/天级
-// rollup(那是 ClickHouse 物化视图的能力)。返回 nil 而不是报错,
-// 让调用方(后台调度)可以对两种后端用同一套调用逻辑,不必先判断
-// 后端类型——降级体现在"不做",而不是"调用会失败"。
-func (s *Store) Aggregate(ctx context.Context, w model.Window) error {
-	return nil
-}
-
-// Retention 按时间删除明细表里过期的行。
+// Retention 按时间删除过期的行,并把释放的页归还文件系统。
 //
-// SQLite 没有 ClickHouse 的分区概念,只能 DELETE WHERE。这在兜底
-// 模式下可接受:兜底用户的数据量本就不大(否则该上 ClickHouse),
-// 一次按时间的 DELETE 不构成问题。只处理 DetailTTL——其余粒度的
-// TTL 对应的 rollup 表在 SQLite 版本里根本不存在。
+// DELETE 之后接一次 incremental_vacuum:采样是持续写入的,不回收
+// 的话文件只会单调增长——删掉的空间 SQLite 只标记为可复用,不还给
+// 磁盘。auto_vacuum=INCREMENTAL 在建库时就设好了(见 store.go),
+// 这里才能按需回收而不必做全量 VACUUM(那会重写整个文件)。
+// 只处理 DetailTTL:ntop2ban 不做分层 rollup,没有其他粒度的表。
 func (s *Store) Retention(ctx context.Context, policy model.RetentionPolicy) error {
 	if policy.DetailTTL <= 0 {
 		return nil
@@ -158,25 +151,15 @@ func (s *Store) Retention(ctx context.Context, policy model.RetentionPolicy) err
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM flows WHERE reported_at < ?", cutoff); err != nil {
 		return fmt.Errorf("sqlite: retention: %w", err)
 	}
-	return nil
-}
-
-// Compact 执行 VACUUM 回收删除后的空间。
-//
-// 与 ClickHouse 的 Compact 一样,这是重操作(VACUUM 会重写整个
-// 数据库文件),只应由运维/后台调度按需触发,不在请求路径上调用。
-func (s *Store) Compact(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
-		return fmt.Errorf("sqlite: vacuum: %w", err)
+	if _, err := s.db.ExecContext(ctx, "PRAGMA incremental_vacuum"); err != nil {
+		return fmt.Errorf("sqlite: incremental_vacuum: %w", err)
 	}
 	return nil
 }
 
-// Stats 返回行数与时间范围,并把 Degraded 置为 true——这是 SQLite
-// 后端向前端表明"当前处于功能降级模式"的唯一信号,前端据此隐藏
-// 依赖历史趋势/多维聚合的入口。
+// Stats 返回行数与时间范围,供仪表板展示"数据在正常流入"。
 func (s *Store) Stats(ctx context.Context) (model.StorageStats, error) {
-	stats := model.StorageStats{Backend: "sqlite", Degraded: true}
+	stats := model.StorageStats{Backend: "sqlite"}
 
 	var total int64
 	var oldest, newest *int64

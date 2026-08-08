@@ -1,13 +1,14 @@
-// Package sqlite 是 FlowStorage 的极简兜底实现,面向不愿/无法部署外部
-// ClickHouse 的用户(见 xdp-ban-架构方案 v0.3 第一节)。
+// Package sqlite 是 ntop2ban 唯一的存储实现。
 //
-// 这是**功能降级**模式:能收、能存、能做基础的 Top-N 查询与按时间
-// 清理,但没有 ClickHouse 那套物化视图/rollup 的分层聚合能力。因此
-// Aggregate 是空操作,Stats 会把 Degraded 置为 true,供前端据此隐藏
-// 依赖历史趋势/多维聚合的展示入口。
+// 这不是"兜底":ClickHouse 那套分层聚合已经搬去 xdp-ban(它才需要处理
+// 大流量镜像),ntop2ban 面向小企业,一个 SQLite 文件就是全部持久层——
+// 采样流量、审批流、knock 配置、pingping 探测结果都落这一个文件,
+// 拷走这个文件就是完整备份。
 //
-// 底层用 modernc.org/sqlite(纯 Go,无 cgo),与 xdp-ban 的审批库
-// 保持同一套技术选型,ntop2ban 主二进制仍可 CGO_ENABLED=0 静态编译。
+// 驱动用 modernc.org/sqlite(纯 Go,无 cgo),这是硬约束:ntop2ban 要
+// 保持 CGO_ENABLED=0 静态编译、scp 即可运行。这也是搬 pingping 探测
+// 能力过来时不能直接复用它 store.go 的原因——那边用的 mattn/go-sqlite3
+// 是 cgo 驱动。
 package sqlite
 
 import (
@@ -32,7 +33,11 @@ type Store struct {
 // 安全/性能常规折中。这些不是可选项,少一个都会在并发下出问题——
 // 这条经验是从 xdp-ban 借来的,不重新踩一遍。
 func Open(path string) (*Store, error) {
-	dsn := path + "?_pragma=journal_mode(WAL)" +
+	// auto_vacuum=INCREMENTAL 必须在任何表建立之前设置,否则无效——
+	// 它决定文件格式。有了它,Retention 删完数据可以用
+	// PRAGMA incremental_vacuum 把页还给文件系统,不必做全量 VACUUM。
+	dsn := path + "?_pragma=auto_vacuum(INCREMENTAL)" +
+		"&_pragma=journal_mode(WAL)" +
 		"&_pragma=busy_timeout(5000)" +
 		"&_pragma=synchronous(NORMAL)"
 
@@ -92,6 +97,10 @@ CREATE INDEX IF NOT EXISTS idx_flows_src_ip ON flows(src_ip);
 `
 	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 		return err
+	}
+	// 敲门相关的表(序列定义 + 成功授权记录),见 knock.go。
+	if _, err := s.db.ExecContext(ctx, knockSchema); err != nil {
+		return fmt.Errorf("knock schema: %w", err)
 	}
 	return nil
 }
