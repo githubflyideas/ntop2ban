@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/githubflyideas/ntop2ban/internal/model"
+	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
 
 // aggregator 是三种数据源共用的五元组聚合器。
 //
 // 这是"流量展示要统一"的技术落点:无论包从 XDP ringbuf 还是 AF_PACKET
-// socket 来,都归到这里做同样的聚合、产出同样的 model.Flow。上层看不出
+// socket 来,都归到这里做同样的聚合、产出同样的 flow.Flow。上层看不出
 // 差别,曲线口径一致。
 //
 // 唯一体现差别的地方是 Flow.Device 里带上的模式标签,以及界面上单独
@@ -22,7 +22,6 @@ type aggregator struct {
 	mu    sync.Mutex
 	flows map[flowKey]*flowAgg
 
-	device    string
 	samplingN int
 	maxFlows  int
 
@@ -42,19 +41,29 @@ type flowKey struct {
 }
 
 type flowAgg struct {
-	pkts     int64
-	bytes    int64
-	lastSeen time.Time
+	pkts  int64
+	bytes int64
+	// firstSeen/lastSeen 构成 Canonical Flow 的 Start/End。
+	// 只记一个时间点的话,一条持续整个窗口的流会被压成一个瞬间,
+	// duration 永远是 0,时间序列对齐也会失真。
+	firstSeen time.Time
+	lastSeen  time.Time
+	// tcpFlags 是窗口内所有包的按位或:一条流里 SYN 与 FIN 分别在不同
+	// 的包上,取任意单个包的 flags 都会丢掉另一半信息。
+	tcpFlags uint16
+	vlan     uint16
 }
 
 // Observation 是一个已解析的包,由各数据源投喂。
 type Observation struct {
-	SrcIP   [4]byte
-	DstIP   [4]byte
-	SrcPort uint16
-	DstPort uint16
-	Proto   uint8 // 6 = tcp, 17 = udp
-	Length  int
+	SrcIP    [4]byte
+	DstIP    [4]byte
+	SrcPort  uint16
+	DstPort  uint16
+	Proto    uint8 // IANA 协议号
+	Length   int
+	TCPFlags uint16
+	VLAN     uint16
 }
 
 const (
@@ -68,7 +77,7 @@ const (
 	DefaultMaxFlows = 20000
 )
 
-func newAggregator(device string, samplingN, maxFlows int, sink Sink, lg *log.Logger) *aggregator {
+func newAggregator(samplingN, maxFlows int, sink Sink, lg *log.Logger) *aggregator {
 	if maxFlows <= 0 {
 		maxFlows = DefaultMaxFlows
 	}
@@ -77,7 +86,6 @@ func newAggregator(device string, samplingN, maxFlows int, sink Sink, lg *log.Lo
 	}
 	return &aggregator{
 		flows:     make(map[flowKey]*flowAgg),
-		device:    device,
 		samplingN: samplingN,
 		maxFlows:  maxFlows,
 		sink:      sink,
@@ -91,10 +99,12 @@ func (a *aggregator) add(o Observation) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	now := time.Now()
 	if agg, ok := a.flows[k]; ok {
 		agg.pkts++
 		agg.bytes += int64(o.Length)
-		agg.lastSeen = time.Now()
+		agg.lastSeen = now
+		agg.tcpFlags |= o.TCPFlags
 		return
 	}
 	if len(a.flows) >= a.maxFlows {
@@ -103,7 +113,11 @@ func (a *aggregator) add(o Observation) {
 		a.dropped++
 		return
 	}
-	a.flows[k] = &flowAgg{pkts: 1, bytes: int64(o.Length), lastSeen: time.Now()}
+	a.flows[k] = &flowAgg{
+		pkts: 1, bytes: int64(o.Length),
+		firstSeen: now, lastSeen: now,
+		tcpFlags: o.TCPFlags, vlan: o.VLAN,
+	}
 }
 
 // flush 把窗口内的聚合结果写入 sink 并清空。
@@ -119,22 +133,27 @@ func (a *aggregator) flush(ctx context.Context) {
 		return
 	}
 
-	now := time.Now()
-	batch := make([]model.Flow, 0, len(a.flows))
+	batch := make([]flow.Flow, 0, len(a.flows))
 	for k, agg := range a.flows {
-		batch = append(batch, model.Flow{
-			ReportedAt: now,
-			Device:     a.device,
-			SamplingN:  a.samplingN,
-			SrcIP:      net.IPv4(k.src[0], k.src[1], k.src[2], k.src[3]).String(),
-			DstIP:      net.IPv4(k.dst[0], k.dst[1], k.dst[2], k.dst[3]).String(),
-			SrcPort:    int(k.sport),
-			DstPort:    int(k.dport),
-			Proto:      protoName(k.proto),
-			PktCount:   agg.pkts,
-			ByteCount:  agg.bytes,
-			LastSeen:   agg.lastSeen,
-		})
+		f := flow.Flow{
+			Start:    agg.firstSeen,
+			End:      agg.lastSeen,
+			SrcIP:    net.IPv4(k.src[0], k.src[1], k.src[2], k.src[3]).String(),
+			DstIP:    net.IPv4(k.dst[0], k.dst[1], k.dst[2], k.dst[3]).String(),
+			SrcPort:  k.sport,
+			DstPort:  k.dport,
+			Protocol: k.proto,
+			Packets:  uint64(agg.pkts),
+			Bytes:    uint64(agg.bytes),
+
+			SamplingRate: uint32(a.samplingN),
+			SourceType:   flow.SourceLocalXDP,
+			TCPFlags:     agg.tcpFlags,
+			VLAN:         agg.vlan,
+		}
+		// 按采样率还原估算值,同时保留实测值(见 flow.ApplySampling)。
+		f.ApplySampling()
+		batch = append(batch, f)
 	}
 	// 先清空再写库:写库可能耗时(SQLite 事务),期间到达的包应计入
 	// 下一个窗口,而不是被这次 flush 顺带清掉。
@@ -170,16 +189,5 @@ func (a *aggregator) runFlushLoop(ctx context.Context, interval time.Duration) {
 		case <-t.C:
 			a.flush(ctx)
 		}
-	}
-}
-
-func protoName(p uint8) string {
-	switch p {
-	case 17:
-		return "udp"
-	case 1:
-		return "icmp"
-	default:
-		return "tcp"
 	}
 }

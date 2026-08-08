@@ -14,26 +14,26 @@ import (
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
 
-	"github.com/githubflyideas/ntop2ban/internal/model"
+	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
 
 type fakeSink struct {
 	mu      sync.Mutex
-	batches [][]model.Flow
+	batches [][]flow.Flow
 	err     error
 }
 
-func (f *fakeSink) Append(ctx context.Context, b []model.Flow) error {
+func (f *fakeSink) Append(ctx context.Context, b []flow.Flow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
-	f.batches = append(f.batches, append([]model.Flow(nil), b...))
+	f.batches = append(f.batches, append([]flow.Flow(nil), b...))
 	return nil
 }
 
-func (f *fakeSink) all() [][]model.Flow {
+func (f *fakeSink) all() [][]flow.Flow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.batches
@@ -63,10 +63,10 @@ func TestAggregatorProducesIdenticalFlowsRegardlessOfSource(t *testing.T) {
 		obs("203.0.113.8", "198.51.100.1", 40001, 53, 17, 80),
 	}
 
-	results := map[Mode][]model.Flow{}
+	results := map[Mode][]flow.Flow{}
 	for _, mode := range []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket} {
 		sink := &fakeSink{}
-		agg := newAggregator(deviceLabel("eth0", mode), 100, DefaultMaxFlows, sink, discardLogger())
+		agg := newAggregator(100, DefaultMaxFlows, sink, discardLogger())
 		for _, p := range packets {
 			agg.add(p)
 		}
@@ -91,24 +91,24 @@ func TestAggregatorProducesIdenticalFlowsRegardlessOfSource(t *testing.T) {
 				t.Errorf("%s: 缺少流 %s", mode, k)
 				continue
 			}
-			if gotFlow.PktCount != wantFlow.PktCount || gotFlow.ByteCount != wantFlow.ByteCount {
+			if gotFlow.Packets != wantFlow.Packets || gotFlow.Bytes != wantFlow.Bytes {
 				t.Errorf("%s: 流 %s 计数不同 want pkt=%d byte=%d got pkt=%d byte=%d",
-					mode, k, wantFlow.PktCount, wantFlow.ByteCount, gotFlow.PktCount, gotFlow.ByteCount)
+					mode, k, wantFlow.Packets, wantFlow.Bytes, gotFlow.Packets, gotFlow.Bytes)
 			}
-			if gotFlow.SamplingN != wantFlow.SamplingN {
+			if gotFlow.SamplingRate != wantFlow.SamplingRate {
 				t.Errorf("%s: 流 %s 采样率不同", mode, k)
 			}
-			if gotFlow.Proto != wantFlow.Proto {
+			if gotFlow.Protocol != wantFlow.Protocol {
 				t.Errorf("%s: 流 %s 协议不同", mode, k)
 			}
 		}
 	}
 }
 
-func normalize(flows []model.Flow) map[string]model.Flow {
-	out := map[string]model.Flow{}
+func normalize(flows []flow.Flow) map[string]flow.Flow {
+	out := map[string]flow.Flow{}
 	for _, f := range flows {
-		k := f.SrcIP + ":" + itoa(f.SrcPort) + "->" + f.DstIP + ":" + itoa(f.DstPort) + "/" + f.Proto
+		k := f.SrcIP + ":" + itoa(int(f.SrcPort)) + "->" + f.DstIP + ":" + itoa(int(f.DstPort)) + "/" + itoa(int(f.Protocol))
 		out[k] = f
 	}
 	return out
@@ -128,20 +128,9 @@ func itoa(v int) string {
 	return string(b[i:])
 }
 
-// TestDeviceLabelIdentifiesMode Device 字段要带上模式标签,这样界面
-// 上能看出数据来自哪一级——性能差一个数量级,运维需要知道。
-func TestDeviceLabelIdentifiesMode(t *testing.T) {
-	if got := deviceLabel("eth0", ModeXDPNative); got != "eth0(xdp-native)" {
-		t.Errorf("got %q", got)
-	}
-	if got := deviceLabel("", ModeAFPacket); got != "any(af-packet)" {
-		t.Errorf("空网卡名应显示 any, got %q", got)
-	}
-}
-
 func TestAggregatorCountsAndSeparatesFlows(t *testing.T) {
 	sink := &fakeSink{}
-	agg := newAggregator("eth0", 1, DefaultMaxFlows, sink, discardLogger())
+	agg := newAggregator(1, DefaultMaxFlows, sink, discardLogger())
 
 	for i := 0; i < 3; i++ {
 		agg.add(obs("203.0.113.7", "198.51.100.1", 40000, 443, 6, 100))
@@ -153,14 +142,14 @@ func TestAggregatorCountsAndSeparatesFlows(t *testing.T) {
 	if len(flows) != 2 {
 		t.Fatalf("want 2 flows, got %d", len(flows))
 	}
-	byPort := map[int]model.Flow{}
+	byPort := map[int]flow.Flow{}
 	for _, f := range flows {
-		byPort[f.DstPort] = f
+		byPort[int(f.DstPort)] = f
 	}
-	if byPort[443].PktCount != 3 || byPort[443].ByteCount != 300 {
-		t.Errorf("443 流聚合错误: %+v", byPort[443])
+	if byPort[443].ObservedPackets != 3 || byPort[443].ObservedBytes != 300 {
+		t.Errorf("443 流聚合错误(实测值): %+v", byPort[443])
 	}
-	if byPort[8443].PktCount != 1 {
+	if byPort[8443].ObservedPackets != 1 {
 		t.Errorf("8443 流聚合错误: %+v", byPort[8443])
 	}
 }
@@ -169,7 +158,7 @@ func TestAggregatorCountsAndSeparatesFlows(t *testing.T) {
 // 聚合表几秒内吃光内存——观测组件不该有能力把整机 OOM。
 func TestMaxFlowsCapsMemory(t *testing.T) {
 	sink := &fakeSink{}
-	agg := newAggregator("eth0", 1, 10, sink, discardLogger())
+	agg := newAggregator(1, 10, sink, discardLogger())
 
 	for i := 0; i < 100; i++ {
 		agg.add(obs("203.0.113.7", "198.51.100.1", 40000, 1000+i, 6, 100))
@@ -186,7 +175,7 @@ func TestMaxFlowsCapsMemory(t *testing.T) {
 // 是权衡,停止统计已知流等于丢掉已经测到的事实。
 func TestMaxFlowsKeepsCountingKnownFlows(t *testing.T) {
 	sink := &fakeSink{}
-	agg := newAggregator("eth0", 1, 1, sink, discardLogger())
+	agg := newAggregator(1, 1, sink, discardLogger())
 
 	known := obs("203.0.113.7", "198.51.100.1", 40000, 443, 6, 100)
 	agg.add(known)
@@ -199,14 +188,14 @@ func TestMaxFlowsKeepsCountingKnownFlows(t *testing.T) {
 	if len(flows) != 1 {
 		t.Fatalf("want 1 flow, got %d", len(flows))
 	}
-	if flows[0].PktCount != 3 {
-		t.Errorf("已有流应继续累加: want 3, got %d", flows[0].PktCount)
+	if flows[0].ObservedPackets != 3 {
+		t.Errorf("已有流应继续累加: want 3, got %d", flows[0].ObservedPackets)
 	}
 }
 
 func TestFlushClearsWindowAndSurvivesSinkError(t *testing.T) {
 	sink := &fakeSink{err: errors.New("boom")}
-	agg := newAggregator("eth0", 1, DefaultMaxFlows, sink, discardLogger())
+	agg := newAggregator(1, DefaultMaxFlows, sink, discardLogger())
 
 	agg.add(obs("203.0.113.7", "198.51.100.1", 40000, 443, 6, 100))
 	agg.flush(context.Background()) // 不应 panic
@@ -223,7 +212,7 @@ func TestFlushClearsWindowAndSurvivesSinkError(t *testing.T) {
 
 func TestFlushEmptyDoesNotCallSink(t *testing.T) {
 	sink := &fakeSink{}
-	agg := newAggregator("eth0", 1, DefaultMaxFlows, sink, discardLogger())
+	agg := newAggregator(1, DefaultMaxFlows, sink, discardLogger())
 	agg.flush(context.Background())
 	if len(sink.all()) != 0 {
 		t.Error("空窗口不应写库")
@@ -324,33 +313,27 @@ func TestSamplingUsesKernelSideRand(t *testing.T) {
 
 // --- 帧解析 ---
 
-func TestParseFrameUsesIPTotalLength(t *testing.T) {
-	// IP 头声明 60,实际帧更长(以太网 padding)——应采用声明值
+func TestToObservationUsesSharedParser(t *testing.T) {
+	// 声明 60,实际帧更长(以太网 padding)——应采用声明值。
+	// 这条断言的意义是确认 datasource 走的是 internal/flow 那份共用解析,
+	// 而不是自己又实现了一遍:口径一旦分叉,同一份流量在不同输入方式下
+	// 会显示出不同数字,且没有任何报错。
 	f := buildFrame(t, 6, 443, 5, 0, 60)
-	o, err := parseFrame(f)
+	o, err := toObservation(f)
 	if err != nil {
-		t.Fatalf("parseFrame: %v", err)
+		t.Fatalf("toObservation: %v", err)
 	}
 	if o.Length != 60 {
 		t.Errorf("应采用 IP 头声明的总长: want 60, got %d", o.Length)
 	}
-
-	// 声明值大于实际抓到的字节数(snaplen 截断)——回退到实际长度,
-	// 避免统计出比抓到的还多的字节
-	f2 := buildFrame(t, 6, 443, 5, 0, 9000)
-
-	o2, err := parseFrame(f2)
-	if err != nil {
-		t.Fatalf("parseFrame: %v", err)
-	}
-	if o2.Length != len(f2)-ethHdrLen {
-		t.Errorf("声明超过实际时应回退: want %d, got %d", len(f2)-ethHdrLen, o2.Length)
+	if o.DstPort != 443 || o.Proto != 6 {
+		t.Errorf("五元组解析错误: %+v", o)
 	}
 }
 
 func TestParseFrameHandlesIPOptions(t *testing.T) {
 	f := buildFrame(t, 6, 8080, 8, 0, 0)
-	o, err := parseFrame(f)
+	o, err := toObservation(f)
 	if err != nil {
 		t.Fatalf("parseFrame: %v", err)
 	}
@@ -362,7 +345,7 @@ func TestParseFrameHandlesIPOptions(t *testing.T) {
 func TestParseFrameRejectsTruncated(t *testing.T) {
 	f := buildFrame(t, 6, 443, 5, 0, 0)
 	for _, n := range []int{0, 10, ethHdrLen, ethHdrLen + 10, ethHdrLen + 20} {
-		if _, err := parseFrame(f[:n]); err == nil {
+		if _, err := toObservation(f[:n]); err == nil {
 			t.Errorf("截断到 %d 字节应报错", n)
 		}
 	}

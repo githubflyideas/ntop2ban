@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
+
+	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
 
 // afPacketSource 是不依赖 XDP 的兼容层:AF_PACKET socket + cBPF 过滤。
@@ -53,7 +55,7 @@ func openAFPacket(cfg Config, lg *log.Logger) (Source, error) {
 
 	s := &afPacketSource{
 		fd:            fd,
-		agg:           newAggregator(deviceLabel(cfg.Iface, ModeAFPacket), n, DefaultMaxFlows, cfg.Sink, lg),
+		agg:           newAggregator(n, DefaultMaxFlows, cfg.Sink, lg),
 		log:           lg,
 		flushInterval: DefaultFlushInterval,
 	}
@@ -102,7 +104,7 @@ func (s *afPacketSource) Run(ctx context.Context) error {
 			// 读错误不终止:一个畸形包或瞬时 ENOBUFS 不代表 socket 坏了。
 			continue
 		}
-		obs, err := parseFrame(buf[:n])
+		obs, err := toObservation(buf[:n])
 		if err != nil {
 			continue
 		}
@@ -181,49 +183,27 @@ func assembleSampleFilter(samplingN int) (*unix.SockFprog, error) {
 	return &unix.SockFprog{Len: uint16(len(filters)), Filter: &filters[0]}, nil
 }
 
-// parseFrame 解析以太网 + IPv4 + TCP/UDP,产出与 XDP 侧同构的 Observation。
+// toObservation 把 flow.ParseEthernet 的结果转成聚合器要的形态。
 //
-// 逐层做长度检查:过滤器保证的是"指定偏移上的值符合条件",不保证包
-// 没被截断。少一个检查就是一次越界 panic,而观测是最不重要的功能,
-// 不该有能力把封禁与敲门一起带走。
-func parseFrame(frame []byte) (Observation, error) {
+// 解析本身在 internal/flow 里,三种输入(AF_PACKET / sFlow / XDP)共用
+// 同一份实现——各自写一份迟早会在"长度算不算以太网头""分片怎么处理"
+// 这类细节上分叉,而分叉的表现是同一份流量在不同输入下显示出不同数字,
+// 没有任何报错。
+func toObservation(frame []byte) (Observation, error) {
 	var o Observation
-	if len(frame) < ethHdrLen+20 {
-		return o, errors.New("帧过短")
+	p, err := flow.ParseEthernet(frame)
+	if err != nil {
+		return o, err
 	}
-	if frame[12] != 0x08 || frame[13] != 0x00 {
-		return o, errors.New("非 IPv4")
+	if v4 := p.SrcIP.To4(); v4 != nil {
+		copy(o.SrcIP[:], v4)
 	}
-
-	ip := frame[ethHdrLen:]
-	ihl := int(ip[0]&0x0f) * 4
-	if ihl < 20 || len(ip) < ihl+4 {
-		return o, errors.New("IP 头长度异常")
+	if v4 := p.DstIP.To4(); v4 != nil {
+		copy(o.DstIP[:], v4)
 	}
-
-	// 长度取 IP 头声明的总长,不是抓到的字节数:抓包可能被 snaplen
-	// 截断,用截断长度统计会让流量图系统性缩水,且不会有任何报错。
-	totalLen := int(ip[2])<<8 | int(ip[3])
-	if totalLen == 0 || totalLen > len(ip) {
-		totalLen = len(ip)
-	}
-	o.Length = totalLen
-
-	copy(o.SrcIP[:], ip[12:16])
-	copy(o.DstIP[:], ip[16:20])
-
-	switch ip[9] {
-	case 6:
-		o.Proto = 6
-	case 17:
-		o.Proto = 17
-	default:
-		return o, errors.New("协议不在采集范围")
-	}
-
-	l4 := ip[ihl:]
-	o.SrcPort = uint16(l4[0])<<8 | uint16(l4[1])
-	o.DstPort = uint16(l4[2])<<8 | uint16(l4[3])
+	o.SrcPort, o.DstPort = p.SrcPort, p.DstPort
+	o.Proto, o.Length = p.Protocol, p.Length
+	o.TCPFlags, o.VLAN = p.TCPFlags, p.VLAN
 	return o, nil
 }
 

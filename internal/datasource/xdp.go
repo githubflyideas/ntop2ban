@@ -52,7 +52,7 @@ func openXDP(mode Mode, cfg Config, lg *log.Logger) (Source, error) {
 	s := &xdpSource{
 		mode:          mode,
 		coll:          coll,
-		agg:           newAggregator(cfg.Iface+"("+string(mode)+")", cfg.SamplingN, DefaultMaxFlows, cfg.Sink, lg),
+		agg:           newAggregator(cfg.SamplingN, DefaultMaxFlows, cfg.Sink, lg),
 		knockSink:     cfg.KnockSink,
 		log:           lg,
 		flushInterval: DefaultFlushInterval,

@@ -23,6 +23,7 @@
 package knock
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -92,6 +93,14 @@ type Sequence struct {
 	// 影响(放行只针对新建连接),所以这个值不需要覆盖整个会话时长。
 	OpenFor time.Duration `json:"open_for"`
 }
+
+// DefaultConfigDir 是配置清单的默认目录。与探测清单同一个目录,
+// 用户只需要记住"配置都在 /etc/ntop2ban/*.list"。
+const DefaultConfigDir = "/etc/ntop2ban"
+
+// ErrNoKnockList 表示清单文件不存在。单独定义以便调用方区分
+// "还没配置"(正常的首次启动状态)与"配置有问题"。
+var ErrNoKnockList = errors.New("knock: 清单文件不存在")
 
 // DefaultWindow 是序列的默认完成时限。
 //

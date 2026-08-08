@@ -2,7 +2,7 @@
 //
 // 这是本包存在的唯一理由:**流量展示必须统一**,不管数据是从 XDP native、
 // XDP generic 还是 AF_PACKET 来的。上层(存储、界面)只看到
-// []model.Flow,不知道也不需要知道底层挂在哪一层。
+// []flow.Flow,不知道也不需要知道底层挂在哪一层。
 //
 // 三级降级不是给旧代码找退路,而是真实的兼容性需求:
 //
@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/githubflyideas/ntop2ban/internal/model"
+	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
 
 // Mode 是实际生效的数据源层级。
@@ -65,7 +65,7 @@ type Source interface {
 
 // Sink 接收聚合后的流记录。存储层实现它。
 type Sink interface {
-	Append(ctx context.Context, batch []model.Flow) error
+	Append(ctx context.Context, batch []flow.Flow) error
 }
 
 // KnockSink 接收敲门观测。只有 XDP 数据源能提供精确捕获;
