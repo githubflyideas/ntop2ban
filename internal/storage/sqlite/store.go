@@ -102,6 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_flows_src_ip ON flows(src_ip);
 	if _, err := s.db.ExecContext(ctx, knockSchema); err != nil {
 		return fmt.Errorf("knock schema: %w", err)
 	}
+	// 链路探测轮次表,见 probe.go。
+	if _, err := s.db.ExecContext(ctx, probeSchema); err != nil {
+		return fmt.Errorf("probe schema: %w", err)
+	}
 	return nil
 }
 
