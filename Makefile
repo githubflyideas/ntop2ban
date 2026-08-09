@@ -16,7 +16,7 @@ BPF_SRC := bpf/sampler.c
 BPF_OBJ := internal/datasource/obj/sampler.o
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror
 
-.PHONY: build test check fmt vet bpf bpf-verify release clean
+.PHONY: build test check fmt vet bpf bpf-verify release package clean
 
 build:
 	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o ntop2ban ./cmd/ntop2ban
@@ -52,11 +52,36 @@ bpf-verify:
 	fi
 	@echo "bpf 目标文件与源码一致"
 
+## release: 打出两个架构的发行包。
+##
+## 每个包里是 ntop2ban + 对应架构的 clickhouse 静态二进制,解压即可运行。
+## clickhouse 按需下载(不入库,200MB 级),CH_URL_AMD64/ARM64 可覆盖。
+CH_URL_AMD64 ?= https://builds.clickhouse.com/master/amd64/clickhouse
+CH_URL_ARM64 ?= https://builds.clickhouse.com/master/aarch64/clickhouse
+
 release: check
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-amd64 ./cmd/ntop2ban
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-arm64 ./cmd/ntop2ban
 	cd dist && sha256sum ntop2ban-linux-* > SHA256SUMS
+
+## package: 组装成 tar.gz。分架构下载 clickhouse —— arm64 包里放 amd64 的
+## 二进制会在目标机上直接 exec 失败,而那个错误很难让人想到是打包错了。
+package: release
+	@for arch in amd64 arm64; do \
+	  d=dist/ntop2ban-linux-$$arch.d; \
+	  rm -rf $$d && mkdir -p $$d; \
+	  cp dist/ntop2ban-linux-$$arch $$d/ntop2ban; \
+	  url=$(CH_URL_AMD64); [ $$arch = arm64 ] && url=$(CH_URL_ARM64); \
+	  echo ">> 下载 $$arch 版 clickhouse"; \
+	  curl -fsSL -o $$d/clickhouse $$url || { echo "下载失败: $$url"; exit 1; }; \
+	  chmod +x $$d/clickhouse; \
+	  ( cd dist && mv ntop2ban-linux-$$arch.d ntop2ban-linux-$$arch-pkg \
+	    && tar czf ntop2ban-linux-$$arch.tar.gz --transform "s|^ntop2ban-linux-$$arch-pkg|ntop2ban-linux-$$arch|" ntop2ban-linux-$$arch-pkg \
+	    && rm -rf ntop2ban-linux-$$arch-pkg ); \
+	done
+	cd dist && sha256sum ntop2ban-linux-*.tar.gz >> SHA256SUMS
+	@ls -lh dist/*.tar.gz
 
 clean:
 	rm -rf dist ntop2ban

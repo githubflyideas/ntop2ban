@@ -4,6 +4,9 @@
 
 单机 Flow Analytics 平台。XDP/eBPF 采集 + ClickHouse 存储 + 灵活查询。
 
+一个二进制,拷过去就跑。不需要 Elasticsearch、不需要装数据库、不需要
+Docker、不需要 Java。
+
 ---
 
 ## 这是什么
@@ -23,11 +26,40 @@ Understand            Enforce / Audit
 ```
 
 ntop2ban 不做封禁,只在发现可疑源时把事件推给 xdp-ban,由那边决定
-放行/阻断/待审批。封禁逻辑不回流到这里。
-
-封禁、审批、执行都不在这里 —— 那是 xdp-ban 的职责。链路探测也不在,
-那是 [pingping](https://github.com/githubflyideas/pingping) 的事。
+放行/阻断/待审批。链路探测也不在这里,那是
+[pingping](https://github.com/githubflyideas/pingping) 的事。
 这个程序只做一件事:把流量看清楚。
+
+## 下载
+
+```bash
+# x86_64
+curl -L -o ntop2ban.tar.gz https://github.com/githubflyideas/ntop2ban/releases/latest/download/ntop2ban-linux-amd64.tar.gz
+tar xzf ntop2ban.tar.gz && cd ntop2ban-linux-amd64
+sudo ./ntop2ban -iface eth0 user=admin passwd=你的密码
+```
+
+arm64 把 URL 里的 `amd64` 换成 `arm64`。包里有两个文件:
+
+```
+ntop2ban-linux-amd64/
+├── ntop2ban      # 主程序 ~14MB
+└── clickhouse    # 官方静态二进制,由 ntop2ban 自动拉起托管
+```
+
+压缩包 183MB(clickhouse 那个文件本身 183MB,首次运行时自解压到 771MB)。
+这是"不装数据库"的代价:ClickHouse 是唯一存储,没有兜底后端,所以它必须
+在包里。
+
+不想下这么大的话,单独下主程序(9MB)接外部 ClickHouse:
+
+```bash
+curl -L -o ntop2ban https://github.com/githubflyideas/ntop2ban/releases/latest/download/ntop2ban-linux-amd64
+chmod +x ntop2ban
+sudo ./ntop2ban -iface eth0 -clickhouse-addr 127.0.0.1:9000 user=admin passwd=xxx
+```
+
+也可以从源码构建(见文末),`go build` 一步出二进制,不需要 clang。
 
 ## 快速开始
 
@@ -134,7 +166,16 @@ curl -O https://iptoasn.com/data/ip2asn-v4.tsv.gz
 
 ## 界面
 
-Dashboard、Hosts、Conversations、ASN/Country、Explorer 五个视图。
+五个视图:
+
+| 视图 | 内容 |
+|---|---|
+| **Dashboard** | KPI 卡片(总流量/包/流/活跃源 IP/目的端口)、流量趋势(堆叠面积)、Top Talkers / Destinations / 端口 / ASN、应用与协议构成(甜甜圈) |
+| **Hosts** | Top 源/目的主机,点 IP 下钻到该主机的对端、端口、应用、国家、ASN、协议 |
+| **Conversations** | 源 ↔ 目的 的流量对,两端都可点击下钻 |
+| **ASN / Country** | 源/目的国家、ASN、组织、城市(需 GeoLite2) |
+| **Explorer** | 查询构造器:选字段、运算符、值,提交 AST;可查看生成的 SQL |
+
 所有数据都走 `POST /api/v1/query` 提交 Query AST,每个卡片、每次下钻
 都是一次 AST 请求 —— 同一个引擎服务所有视图。
 
