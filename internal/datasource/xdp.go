@@ -20,11 +20,9 @@ type xdpSource struct {
 	lnk  link.Link
 
 	sampleRD *ringbuf.Reader
-	knockRD  *ringbuf.Reader
 
-	agg       *aggregator
-	knockSink KnockSink
-	log       *log.Logger
+	agg *aggregator
+	log *log.Logger
 
 	flushInterval time.Duration
 }
@@ -53,7 +51,6 @@ func openXDP(mode Mode, cfg Config, lg *log.Logger) (Source, error) {
 		mode:          mode,
 		coll:          coll,
 		agg:           newAggregator(cfg.SamplingN, DefaultMaxFlows, cfg.Sink, lg),
-		knockSink:     cfg.KnockSink,
 		log:           lg,
 		flushInterval: DefaultFlushInterval,
 	}
@@ -90,64 +87,7 @@ func (s *xdpSource) configure(cfg Config) error {
 		return fmt.Errorf("写入采样率: %w", err)
 	}
 
-	// 敲门匹配集合。map 为空时 XDP 侧不会上报任何敲门事件,
-	// 这正是"还没配置序列"时应有的行为。
-	if err := fillU16Set(s.coll.Maps["knock_ports"], cfg.KnockTCPPorts); err != nil {
-		return fmt.Errorf("写入敲门端口: %w", err)
-	}
-	if err := fillU16Set(s.coll.Maps["knock_icmp_lens"], cfg.KnockICMPLens); err != nil {
-		return fmt.Errorf("写入敲门 ICMP 长度: %w", err)
-	}
 	return nil
-}
-
-func fillU16Set(m *ebpf.Map, values []int) error {
-	if m == nil {
-		return errors.New("map 不存在")
-	}
-	one := uint8(1)
-	for _, v := range values {
-		k := uint16(v)
-		if err := m.Put(k, one); err != nil {
-			return fmt.Errorf("写入 %d: %w", v, err)
-		}
-	}
-	return nil
-}
-
-// UpdateKnockSets 热更新敲门匹配集合(序列审批通过后调用)。
-//
-// 直接改 map 而不是重新加载程序:重载会短暂丢失观测,而敲门配置变更
-// 是常规操作,不该每次都造成采样中断。
-func (s *xdpSource) UpdateKnockSets(ports, icmpLens []int) error {
-	if err := clearAndFill(s.coll.Maps["knock_ports"], ports); err != nil {
-		return err
-	}
-	return clearAndFill(s.coll.Maps["knock_icmp_lens"], icmpLens)
-}
-
-func clearAndFill(m *ebpf.Map, values []int) error {
-	if m == nil {
-		return errors.New("map 不存在")
-	}
-	// 先删旧键:直接覆盖会留下上一版序列的端口仍然匹配,
-	// 那意味着旧序列在新序列生效后还能敲开门。
-	var k uint16
-	var v uint8
-	it := m.Iterate()
-	var stale []uint16
-	for it.Next(&k, &v) {
-		stale = append(stale, k)
-	}
-	if err := it.Err(); err != nil {
-		return err
-	}
-	for _, key := range stale {
-		if err := m.Delete(key); err != nil {
-			return err
-		}
-	}
-	return fillU16Set(m, values)
 }
 
 // attach 挂载 XDP 程序。
@@ -197,28 +137,17 @@ func (s *xdpSource) openReaders() error {
 		return fmt.Errorf("打开采样 ringbuf: %w", err)
 	}
 	s.sampleRD = sampleRD
-
-	knockRD, err := ringbuf.NewReader(s.coll.Maps["knock_events"])
-	if err != nil {
-		return fmt.Errorf("打开敲门 ringbuf: %w", err)
-	}
-	s.knockRD = knockRD
 	return nil
 }
 
 func (s *xdpSource) Mode() Mode { return s.mode }
 
-// Run 读两个 ringbuf 并周期 flush。
-//
-// 采样与敲门用两个独立的 ringbuf、两个 goroutine:共用一个缓冲区时,
-// 高流量下敲门事件会因为缓冲区被采样事件占满而丢失——那正是最不能丢的
-// 东西。分开之后采样再怎么溢出也不影响敲门。
+// Run 读 ringbuf 并周期 flush。
 func (s *xdpSource) Run(ctx context.Context) error {
 	go s.agg.runFlushLoop(ctx, s.flushInterval)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 1)
 	go func() { errCh <- s.readSamples(ctx) }()
-	go func() { errCh <- s.readKnocks(ctx) }()
 
 	select {
 	case <-ctx.Done():
@@ -246,34 +175,9 @@ func (s *xdpSource) readSamples(ctx context.Context) error {
 	}
 }
 
-func (s *xdpSource) readKnocks(ctx context.Context) error {
-	for {
-		rec, err := s.knockRD.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) || ctx.Err() != nil {
-				return nil
-			}
-			continue
-		}
-		srcIP, kind, value, err := parseKnockEvent(rec.RawSample)
-		if err != nil || s.knockSink == nil {
-			continue
-		}
-		switch kind {
-		case 1:
-			s.knockSink.FeedTCP(srcIP, int(value))
-		case 2:
-			s.knockSink.FeedICMP(srcIP, int(value))
-		}
-	}
-}
-
 func (s *xdpSource) Close() error {
 	if s.sampleRD != nil {
 		s.sampleRD.Close()
-	}
-	if s.knockRD != nil {
-		s.knockRD.Close()
 	}
 	if s.lnk != nil {
 		s.lnk.Close()

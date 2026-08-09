@@ -392,24 +392,6 @@ func TestParseSampleEventRejectsShort(t *testing.T) {
 	}
 }
 
-func TestParseKnockEventLayout(t *testing.T) {
-	raw := make([]byte, knockEventSize)
-	copy(raw[0:4], net.ParseIP("203.0.113.9").To4())
-	binary.LittleEndian.PutUint16(raw[4:6], 9001)
-	raw[6] = 1
-
-	src, kind, value, err := parseKnockEvent(raw)
-	if err != nil {
-		t.Fatalf("parseKnockEvent: %v", err)
-	}
-	if src != "203.0.113.9" {
-		t.Errorf("来源: want 203.0.113.9, got %s", src)
-	}
-	if kind != 1 || value != 9001 {
-		t.Errorf("kind/value: got %d/%d", kind, value)
-	}
-}
-
 // --- 降级顺序 ---
 
 // TestAttemptOrderDefaultsToNativeFirst 默认必须先试性能最好的那级。

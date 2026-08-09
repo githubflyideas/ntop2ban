@@ -68,13 +68,6 @@ type Sink interface {
 	Append(ctx context.Context, batch []flow.Flow) error
 }
 
-// KnockSink 接收敲门观测。只有 XDP 数据源能提供精确捕获;
-// AF_PACKET 模式下敲门由 internal/knock 自己的 socket 负责。
-type KnockSink interface {
-	FeedTCP(srcIP string, port int)
-	FeedICMP(srcIP string, payloadLen int)
-}
-
 // Config 是数据源的构造参数。
 type Config struct {
 	Iface     string
@@ -85,13 +78,7 @@ type Config struct {
 	// XDP 的锅")与测试。
 	Prefer Mode
 
-	Sink      Sink
-	KnockSink KnockSink
-
-	// KnockTCPPorts / KnockICMPLens 是敲门序列涉及的端口与 ICMP 长度。
-	// XDP 模式下写入 BPF map 做精确匹配。
-	KnockTCPPorts []int
-	KnockICMPLens []int
+	Sink Sink
 }
 
 // ErrUnavailable 表示某一层级在当前环境不可用,应继续降级。

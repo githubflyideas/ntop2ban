@@ -5,6 +5,7 @@ go 1.22.5
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.30.0
 	github.com/cilium/ebpf v0.15.0
+	github.com/oschwald/maxminddb-golang v1.13.1
 	golang.org/x/net v0.30.0
 	golang.org/x/sys v0.26.0
 )

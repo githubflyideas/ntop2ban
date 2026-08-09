@@ -1,17 +1,8 @@
-/* sampler.c —— ntop2ban 的 XDP 数据面:1/N 流量采样 + 敲门精确匹配。
+/* sampler.c —— ntop2ban 的 XDP 数据面:1/N 流量采样。
  *
- * 一个程序两个输出,是刻意的设计:
- *
- *   - 采样走 1/N 抽样。目的是控制开销,允许丢包,只服务可视化。
- *   - 敲门走精确匹配,一个包都不能漏。抽样会漏掉绝大部分敲门包,
- *     所以安全判定必须有自己的数据路径——这条原则在架构文档里就定了。
- *
- * 两者共用一次包解析,但判定与上报路径完全分开。做成两个 XDP 程序不行:
- * 一张网卡只能挂一个。
- *
- * 永远 XDP_PASS:这个程序只观测,不拦截。封禁下发到 nftables,那是
- * netfilter hook,与 XDP 不同层次,因此不存在挂载点冲突——这正是
- * "采样用 XDP 拿性能、封禁用 nftables 避冲突"这个组合的由来。
+ * 永远 XDP_PASS:这个程序只观测,不拦截。ntop2ban 的职责是
+ * Observe / Analyze,封禁与执行是 xdp-ban 的事(见 README 的边界说明)。
+ * 因此这里不需要与任何封禁程序争抢网卡挂载点。
  *
  * 编译(需要 clang + libbpf-dev):
  *   make bpf
@@ -56,47 +47,11 @@ struct sample_event {
     __u8  _pad;
 };
 
-/* ---- 敲门配置 ---- */
-
-/* 敲门关心的 TCP 端口集合。key 是主机字节序端口号,value 恒为 1。
- * 序列审批通过后由用户态刷新——这就是"审批只是配置变更,不是实时闸门"
- * 的落点:守护进程始终按 map 里当前的内容工作。 */
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, __u16);
-    __type(value, __u8);
-    __uint(max_entries, 16);
-} knock_ports SEC(".maps");
-
-/* 敲门关心的 ICMP payload 长度集合(即 ping -s 的值)。 */
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, __u16);
-    __type(value, __u8);
-    __uint(max_entries, 16);
-} knock_icmp_lens SEC(".maps");
-
-/* 敲门事件 ringbuf。与采样分开,避免抽样噪声把敲门事件挤掉——
- * 共用一个 ringbuf 时,高流量下敲门事件会因为缓冲区被采样事件占满而
- * 丢失,那正是最不能丢的东西。 */
-struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 16);   /* 64KB,敲门量极小 */
-} knock_events SEC(".maps");
-
-struct knock_event {
-    __u32 src_ip;
-    __u16 value;    /* TCP 步:端口号;ICMP 步:payload 长度 */
-    __u8  kind;     /* 1 = tcp, 2 = icmp */
-    __u8  _pad;
-};
-
 /* ---- 全局计数,供界面展示"采样器在正常工作" ---- */
 struct global_stats {
     __u64 total_packets;
     __u64 total_bytes;
     __u64 sampled_packets;
-    __u64 knock_hits;
 };
 
 struct {
@@ -160,24 +115,6 @@ int xdp_sampler(struct xdp_md *ctx)
         src_port = bpf_ntohs(tcp->source);
         dst_port = bpf_ntohs(tcp->dest);
 
-        /* 敲门:只认纯 SYN。SYN+ACK 是本机主动连出去的回包方向,
-         * 算进来会让本机自己的出站连接凑出敲门序列。 */
-        if (tcp->syn && !tcp->ack) {
-            __u8 *hit = bpf_map_lookup_elem(&knock_ports, &dst_port);
-            if (hit) {
-                struct knock_event *ev =
-                    bpf_ringbuf_reserve(&knock_events, sizeof(*ev), 0);
-                if (ev) {
-                    ev->src_ip = ip->saddr;
-                    ev->value = dst_port;
-                    ev->kind = 1;
-                    ev->_pad = 0;
-                    bpf_ringbuf_submit(ev, 0);
-                    if (gs)
-                        __sync_fetch_and_add(&gs->knock_hits, 1);
-                }
-            }
-        }
     } else if (!is_fragment && ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = l4;
         if ((void *)(udp + 1) > data_end)
@@ -185,35 +122,6 @@ int xdp_sampler(struct xdp_md *ctx)
         src_port = bpf_ntohs(udp->source);
         dst_port = bpf_ntohs(udp->dest);
     } else if (!is_fragment && ip->protocol == IPPROTO_ICMP) {
-        struct icmphdr *icmp = l4;
-        if ((void *)(icmp + 1) > data_end)
-            return XDP_PASS;
-
-        /* 只认 echo request。echo reply 是本机 ping 别人的回包,
-         * 算进来会让本机的健康检查不停地"敲自己的门"。 */
-        if (icmp->type == ICMP_ECHO) {
-            /* payload 长度 = IP 总长 - IP 头 - ICMP 头(8)。
-             * 这个值必须与用户在界面上看到的 `ping -s N` 的 N 相同,
-             * 否则用户照提示敲永远敲不开,而且日志里差 8 字节没人想得到。 */
-            __u16 total = bpf_ntohs(ip->tot_len);
-            if (total >= ihl + 8) {
-                __u16 payload_len = total - ihl - 8;
-                __u8 *hit = bpf_map_lookup_elem(&knock_icmp_lens, &payload_len);
-                if (hit) {
-                    struct knock_event *ev =
-                        bpf_ringbuf_reserve(&knock_events, sizeof(*ev), 0);
-                    if (ev) {
-                        ev->src_ip = ip->saddr;
-                        ev->value = payload_len;
-                        ev->kind = 2;
-                        ev->_pad = 0;
-                        bpf_ringbuf_submit(ev, 0);
-                        if (gs)
-                            __sync_fetch_and_add(&gs->knock_hits, 1);
-                    }
-                }
-            }
-        }
         /* ICMP 不进采样:无端口协议只会产生 port=0 的伪流,
          * 占据 Top N 的位置却说明不了"谁在打我"。 */
         return XDP_PASS;

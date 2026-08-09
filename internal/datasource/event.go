@@ -49,16 +49,6 @@ func parseSampleEvent(raw []byte) (Observation, error) {
 	return o, nil
 }
 
-func parseKnockEvent(raw []byte) (srcIP string, kind uint8, value uint16, err error) {
-	if len(raw) < knockEventSize {
-		return "", 0, 0, fmt.Errorf("敲门事件长度 %d 小于预期 %d", len(raw), knockEventSize)
-	}
-	ip := net.IPv4(raw[0], raw[1], raw[2], raw[3])
-	value = nativeUint16(raw[4:6])
-	kind = raw[6]
-	return ip.String(), kind, value, nil
-}
-
 // nativeUint16 按本机字节序解析。
 //
 // ringbuf 里的整数是内核按本机字节序写的,不是网络字节序。在 x86/arm64
