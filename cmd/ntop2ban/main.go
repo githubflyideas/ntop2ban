@@ -96,9 +96,17 @@ func main() {
 		} else {
 			log.Printf("富化:ip2asn 已加载 %d 条前缀", asnDB.Size())
 		}
-	} else {
-		log.Println("富化:未指定 -ip2asn,ASN/国家维度不可用" +
-			"(从 https://iptoasn.com/data/ip2asn-v4.tsv.gz 下载)")
+	} else if !asnDB.Loaded() {
+		log.Println("富化:ASN/国家维度不可用 —— 在界面「设置」页点一下同步即可" +
+			"(内置 iptoasn / DB-IP / RIR 等源,无需注册)")
+	}
+
+	cityDB := enrich.NewCityDB()
+	syncer := enrich.NewSyncer(*dataDir, asnDB, cityDB)
+	// 之前同步过的库在重启后仍然生效 —— 否则每次重启都要重新点一遍同步,
+	// 而用户不会觉得那是正常操作。
+	if loaded := syncer.LoadCached(); len(loaded) > 0 {
+		log.Printf("富化:已从缓存加载 %v", loaded)
 	}
 
 	mmdb := enrich.NewMMDB()
@@ -134,7 +142,7 @@ func main() {
 	}
 
 	// 富化包在存储前面:sink 收到 flow 先富化再写库。
-	sink := &enrichingSink{st: st, en: enrich.NewEnricher(asnDB, mmdb)}
+	sink := &enrichingSink{st: st, en: enrich.NewEnricher(asnDB, mmdb, cityDB)}
 
 	var inputLabels []string
 
@@ -161,6 +169,7 @@ func main() {
 
 	srv := api.New(api.Config{
 		Store: st, Auth: au, ASN: asnDB, MMDB: mmdb,
+		City: cityDB, Syncer: syncer,
 		DataDir: *dataDir, Inputs: inputLabels,
 	})
 	mux := http.NewServeMux()

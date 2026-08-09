@@ -253,7 +253,7 @@ func TestClassifyNonPortProtocols(t *testing.T) {
 // --- 端到端富化 ---
 
 func TestEnricherApply(t *testing.T) {
-	e := NewEnricher(loadSample(t), nil)
+	e := NewEnricher(loadSample(t), nil, nil)
 
 	batch := []flow.Flow{
 		{SrcIP: "8.8.8.8", DstIP: "203.0.113.7", Protocol: 6, SrcPort: 53000, DstPort: 443},
@@ -288,7 +288,7 @@ func TestEnricherApply(t *testing.T) {
 // TestEnricherLeavesCityEmptyWithoutMMDB 没加载 mmdb 时 city/region
 // 保持为空,界面上对应视图不显示 —— 而不是编一个值出来。
 func TestEnricherLeavesCityEmptyWithoutMMDB(t *testing.T) {
-	e := NewEnricher(loadSample(t), nil)
+	e := NewEnricher(loadSample(t), nil, nil)
 	batch := []flow.Flow{{SrcIP: "8.8.8.8", DstIP: "203.0.113.7", Protocol: 6, DstPort: 443}}
 	e.Apply(batch)
 
@@ -305,7 +305,7 @@ func TestEnricherLeavesCityEmptyWithoutMMDB(t *testing.T) {
 // TestEnricherWithNilDBDoesNotPanic 富化库缺失时仍要能跑:
 // 只是没有 ASN/国家维度,应用分类照旧(它不依赖外部数据)。
 func TestEnricherWithNilDBDoesNotPanic(t *testing.T) {
-	e := NewEnricher(nil, nil)
+	e := NewEnricher(nil, nil, nil)
 	batch := []flow.Flow{{SrcIP: "8.8.8.8", DstIP: "1.1.1.1", Protocol: 6, DstPort: 22}}
 	e.Apply(batch)
 

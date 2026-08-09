@@ -141,6 +141,14 @@ func (d *DB) Load(r io.Reader) error {
 	return nil
 }
 
+// replace 原子替换全部条目。供 sync 加载其他格式的源时复用同一套查表。
+func (d *DB) replace(entries []entry) {
+	d.mu.Lock()
+	d.entries = entries
+	d.loaded = len(entries) > 0
+	d.mu.Unlock()
+}
+
 // Loaded 表示是否已加载数据。
 func (d *DB) Loaded() bool {
 	d.mu.RLock()

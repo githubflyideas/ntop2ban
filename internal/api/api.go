@@ -24,11 +24,13 @@ import (
 
 // Server 是 HTTP 服务。
 type Server struct {
-	st   *store.Store
-	au   *auth.Auth
-	asn  *enrich.DB
-	mmdb *enrich.MMDB
-	log  *log.Logger
+	st     *store.Store
+	au     *auth.Auth
+	asn    *enrich.DB
+	mmdb   *enrich.MMDB
+	city   *enrich.CityDB
+	syncer *enrich.Syncer
+	log    *log.Logger
 
 	// DataDir 用于存放上传的 mmdb。
 	DataDir string
@@ -43,6 +45,8 @@ type Config struct {
 	Auth    *auth.Auth
 	ASN     *enrich.DB
 	MMDB    *enrich.MMDB
+	City    *enrich.CityDB
+	Syncer  *enrich.Syncer
 	Logger  *log.Logger
 	DataDir string
 	Inputs  []string
@@ -55,6 +59,7 @@ func New(cfg Config) *Server {
 	}
 	return &Server{
 		st: cfg.Store, au: cfg.Auth, asn: cfg.ASN, mmdb: cfg.MMDB,
+		city: cfg.City, syncer: cfg.Syncer,
 		log: lg, DataDir: cfg.DataDir, Inputs: cfg.Inputs,
 	}
 }
@@ -73,6 +78,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/v1/overview", s.authed(s.handleOverview))
 	mux.HandleFunc("/api/v1/enrich/mmdb", s.authed(s.handleMMDBUpload))
+	mux.HandleFunc("/api/v1/enrich/sources", s.authed(s.handleEnrichSources))
+	mux.HandleFunc("/api/v1/enrich/sync", s.authed(s.handleEnrichSync))
 }
 
 // authed 包装需要登录的 handler。
@@ -184,9 +191,9 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request, user stri
 func (s *Server) handleFields(w http.ResponseWriter, r *http.Request, user string) {
 	info := query.Fields()
 
-	// 城市维度只有加载了 mmdb 才有意义。没加载时从可用列表里去掉,
+	// 城市维度需要 mmdb 或城市 CSV 库任一。都没有时从可用列表里去掉,
 	// 界面就不会给出一个查出来永远是空的选项 —— 那比不显示更让人困惑。
-	if !s.mmdb.Loaded() {
+	if !s.cityAvailable() {
 		info.Groupable = withoutCity(info.Groupable)
 		filtered := info.Filterable[:0]
 		for _, f := range info.Filterable {
@@ -197,6 +204,11 @@ func (s *Server) handleFields(w http.ResponseWriter, r *http.Request, user strin
 		info.Filterable = filtered
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// cityAvailable 城市维度是否可用。
+func (s *Server) cityAvailable() bool {
+	return s.mmdb.Loaded() || s.city.Loaded()
 }
 
 func isCityField(name string) bool {
@@ -235,9 +247,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, user str
 	}
 
 	enrichInfo := map[string]any{
-		"asn_loaded":  s.asn.Loaded(),
-		"asn_entries": s.asn.Size(),
-		"mmdb_loaded": s.mmdb.Loaded(),
+		"asn_loaded":   s.asn.Loaded(),
+		"asn_entries":  s.asn.Size(),
+		"mmdb_loaded":  s.mmdb.Loaded(),
+		"city_loaded":  s.city.Loaded(),
+		"city_entries": s.city.Size(),
+		"city_source":  s.city.Source(),
+		"city_ready":   s.cityAvailable(),
 	}
 	if path, epoch, nodes, ok := s.mmdb.Info(); ok {
 		enrichInfo["mmdb_path"] = filepath.Base(path)
@@ -342,6 +358,70 @@ func (s *Server) handleMMDBUpload(w http.ResponseWriter, r *http.Request, user s
 		"build_date": time.Unix(int64(epoch), 0).Format("2006-01-02"),
 		"nodes":      nodes,
 		"note":       "城市与区域维度已可用;历史数据保持当时的快照,不会被回填",
+	})
+}
+
+// handleEnrichSources 返回内置源列表与当前同步状态。
+//
+// 每个源都带上"能填哪些字段""许可""归属口径"三项 —— 用户最常问的是
+// "我装了库为什么某一列还是空的",这三项就是界面上回答它的依据。
+func (s *Server) handleEnrichSources(w http.ResponseWriter, r *http.Request, user string) {
+	out := make([]map[string]any, 0, len(enrich.Sources))
+	for _, src := range enrich.Sources {
+		out = append(out, map[string]any{
+			"id": src.ID, "name": src.Name, "kind": string(src.Kind),
+			"fields": src.Fields, "license": src.License, "note": src.Note,
+			"url": src.URL(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sources": out,
+		"status":  s.syncer.Status(),
+	})
+}
+
+// handleEnrichSync 触发一次同步。
+//
+// 放后台跑并让界面轮询状态,而不是同步等待:city 库有几十 MB,在带宽
+// 受限的机房里可能要几分钟,而反向代理通常在 60 秒就切断连接 ——
+// 那时用户看到 504 却不知道后台其实还在下。
+func (s *Server) handleEnrichSync(w http.ResponseWriter, r *http.Request, user string) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	if _, ok := enrich.SourceByID(body.ID); !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "未知数据源 " + body.ID})
+		return
+	}
+	if st := s.syncer.Status(); st.InProgress {
+		// 同时跑两个同步会让两者争抢同一个库的写锁,而且结果取决于
+		// 谁先完成 —— 明确拒绝比让用户猜好。
+		writeJSON(w, http.StatusConflict,
+			map[string]any{"error": "已有同步在进行中(" + st.SourceID + "),请等它完成"})
+		return
+	}
+
+	go func() {
+		// 不用请求的 context:请求早就返回了,用它会让同步立刻被取消。
+		if err := s.syncer.Sync(context.Background(), body.ID); err != nil {
+			s.log.Printf("[enrich] 同步 %s 失败: %v", body.ID, err)
+		} else {
+			st := s.syncer.Status()
+			s.log.Printf("[enrich] 同步 %s 完成:%d 条记录,%.1f MB",
+				body.ID, st.Entries, float64(st.Bytes)/(1<<20))
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok": true, "note": "同步已在后台开始,可轮询 /api/v1/enrich/sources 看进度",
 	})
 }
 

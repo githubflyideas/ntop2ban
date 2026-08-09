@@ -149,26 +149,40 @@ Observe/Analyze,所以它不需要跟任何封禁程序争抢网卡挂载点。
 不可行。代价是 GeoIP 库更新后历史数据保持当时的快照,这是想要的行为:
 一个 IP 去年属于 A 公司今年属于 B,去年的流量不该被改写成 B 的。
 
-**ip2asn(必备底线)** —— 免费、无许可、无需注册:
+**在界面「设置」页一键同步**,内置这些源,全部免费、无需注册:
 
-```bash
-curl -O https://iptoasn.com/data/ip2asn-v4.tsv.gz
-./ntop2ban -ip2asn ./ip2asn-v4.tsv.gz -iface eth0
-```
+| 源 | 类型 | 填充字段 | 许可 |
+|---|---|---|---|
+| iptoasn.com ip2asn | ASN | ASN、国家(ISO)、组织 | 公共领域 |
+| DB-IP ASN Lite | ASN | ASN、组织(公司全称更规整) | CC BY 4.0 |
+| **DB-IP City Lite** | 城市 | 国家、省/州、城市、经纬度 | CC BY 4.0 |
+| APNIC 分配记录 | ASN | 国家(ISO) | APNIC 开放数据 |
+| 纯真 IP 库(qqwry) | 城市(中文) | 省/市中文名 | 个人非商业免费 |
 
-提供 ASN / 国家 / 组织。查表是排序数组 + 二分而不是 trie:50 万条记录
-二分只需 19 次整数比较,trie 要 32 层指针跳转。
+也可以用 `-ip2asn ./ip2asn-v4.tsv.gz` 指定本地文件。同步过的库存在数据
+目录里,重启后自动加载,不用每次重新点。
 
-**GeoLite2-City(可选叠加)** —— 补城市、区域、经纬度。需要在 MaxMind
-注册拿 license key,不能随发行包分发,所以支持在界面「设置」页上传,
-**上传后立即生效、无需重启**。也可以 `-mmdb /path/to/GeoLite2-City.mmdb`。
+**DB-IP City Lite 让城市维度成为默认可用的功能** —— 它是唯一免费且无需
+注册的城市库,装上之后 Top City 与经纬度就有了,不再必须去 MaxMind 注册。
+MaxMind GeoLite2 精度更高但需要 license key,所以只能手动下载后从界面上传,
+不内置自动同步(那等于替用户接受了他没读过的许可协议)。
 
-两个库刻意不重叠覆盖 country:以 ip2asn 为准,mmdb 只补 city/region。
-否则同一批流量的 Top Country 会因为"有没有加载 mmdb"而变化,那种差异
-没人能解释。
+字段优先级是定死的,因为"我装了库为什么某一列还是空的"是最常见的疑问:
 
-没有 mmdb 时城市相关字段从 `/api/v1/query/fields` 里去掉,界面不会给出
-一个查出来永远是空的选项 —— 那比不显示更让人困惑。
+- `asn` / `org` 来自 ASN 类源
+- `country` / `region` / `city` / 经纬度**同时**来自城市类源 —— 城市库带
+  ISO 码时它的 country 覆盖 ASN 库给的那个
+- 纯真只填中文 `region` / `city`,**不填 country**
+
+最后两条各有理由。城市库覆盖 country 是实测逼出来的:`114.114.114.114`
+在 ip2asn 里归 US(按 BGP 路由归属,该前缀确实被一个美国 AS 宣告),而
+db-ip 定位到山东济南 —— 保留 ASN 库的 country 会产出
+`country=US / city=济南` 这种自相矛盾的行,而矛盾就在同一行里,用户第一眼
+就会看到且无法解释。让 country/region/city 三者来自同一个源才自洽。
+
+纯真不填 country 是因为它输出的是中文自由文本("福建省福州市")而不是
+ISO 码。混进 country 会让 Top Country 里同时出现 `CN` 和 `福建省福州市`
+两种东西,口径彻底乱掉。
 
 ## 界面
 
@@ -307,7 +321,7 @@ make bpf-verify  # 重新编译并与库里的 .o 比对(CI 跑这个)
 - [x] ClickHouse 存储层(flows / flows_1m / ip_metadata,托管子进程)
 - [x] 本机采集:XDP 优先,三级降级
 - [x] sFlow v5 / NetFlow v5 Collector 与 Normalizer
-- [x] 写入时富化(ip2asn + 可选 GeoLite2-City,IANA 服务名分类)
+- [x] 写入时富化(ip2asn / DB-IP / RIR / 纯真 一键在线同步,IANA 服务名分类)
 - [x] Query AST 与查询引擎(字段白名单、强制时间范围与 limit)
 - [x] Dashboard / Hosts / Conversations / ASN-Country / Explorer
 - [x] 认证:启动参数 + 内存会话
@@ -317,9 +331,7 @@ make bpf-verify  # 重新编译并与库里的 .o 比对(CI 跑这个)
 
 ### 已知限制
 
-**城市维度需要自备 GeoLite2。** ip2asn 只有 ASN + country + org。
-上传 GeoLite2-City 后城市与区域可用,但 Geo Map(地图可视化)还没做 ——
-经纬度已经在解析里取出来了,缺的是地图组件。
+**Geo Map(地图可视化)还没做。** 经纬度已经解析并入库了,缺的是地图组件。
 
 **`ORDER BY` 是草案。** 当前 `(timestamp, src_ip, dst_ip, src_port,
 dst_port)` 对应最高频的"最近 1h/24h + 某个 IP"。设计文档明确要求最终

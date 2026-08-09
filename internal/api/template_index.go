@@ -97,6 +97,15 @@ svg{display:block;width:100%;height:auto}
 pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
  border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;
  overflow-x:auto;white-space:pre-wrap;color:var(--dim)}
+.ok{color:var(--green)}
+.warn{color:var(--amber)}
+.src{border:1px solid var(--line);border-radius:7px;padding:11px 13px;margin-bottom:8px}
+.src .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.src .nm{font-weight:600;font-size:12.5px}
+.src .lic{font-size:11px;color:var(--dim2)}
+.src .fl{font-size:11.5px;color:var(--cyan);margin-top:4px}
+.src .nt{font-size:11.5px;color:var(--dim);margin-top:3px}
+.src button{margin-left:auto}
 .tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;
  background:rgba(61,126,255,.14);color:#8ab4ff}
 .up{border:1px dashed var(--line2);border-radius:8px;padding:16px;text-align:center;color:var(--dim)}
@@ -204,17 +213,23 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
 
   <section id="s-settings">
     <div class="grid g2">
-      <div class="panel">
+      <div class="panel wide">
         <h2>富化库</h2>
-        <p class="hint">ip2asn 提供 ASN / 国家 / 组织;GeoLite2-City 额外提供城市与区域</p>
+        <p class="hint">当前状态</p>
         <div id="set-enrich"></div>
-        <div class="up" style="margin-top:12px">
-          <p style="margin:0 0 9px;font-size:12.5px">上传 GeoLite2-City.mmdb</p>
+
+        <h2 style="margin-top:16px">在线同步</h2>
+        <p class="hint">下面这些源都免费、无需注册。点一下即可下载并立即生效,
+          历史数据保持当时的快照不会被回填。</p>
+        <div id="sync-status"></div>
+        <div id="sync-list"></div>
+
+        <h2 style="margin-top:16px">上传 GeoLite2-City.mmdb</h2>
+        <p class="hint">MaxMind 的库精度最高,但需要注册账号拿 license key,
+          所以不能内置自动同步 —— 手动下载后从这里上传</p>
+        <div class="up">
           <input type="file" id="mmdbfile" accept=".mmdb">
           <button class="act" id="mmdbup" style="margin-left:8px">上传并生效</button>
-          <p style="margin:9px 0 0;font-size:11.5px;color:var(--dim2)">
-            GeoLite2 需在 MaxMind 注册后下载,不能随发行包分发。<br>
-            上传后立即生效,无需重启;历史数据保持当时的快照,不会被回填。</p>
         </div>
       </div>
       <div class="panel">
@@ -398,8 +413,14 @@ async function loadOverview(){
 
   $('#set-enrich').innerHTML =
     '<table><tbody>'
-    + row('ip2asn', en.asn_loaded ? (fmtNum(en.asn_entries)+' 条前缀') : '未加载')
-    + row('GeoLite2-City', en.mmdb_loaded ? (esc(en.mmdb_path||'')+' · 构建于 '+esc(en.mmdb_build||'')) : '未加载(城市维度不可用)')
+    + row('ASN / 国家 / 组织', en.asn_loaded
+        ? ('<span class="ok">可用</span> · '+fmtNum(en.asn_entries)+' 条前缀')
+        : '<span class="warn">不可用</span> —— 同步任一 ASN 源即可')
+    + row('城市 / 省州', en.city_ready
+        ? ('<span class="ok">可用</span> · '+(en.mmdb_loaded
+             ? ('GeoLite2 '+esc(en.mmdb_build||''))
+             : (esc(en.city_source||'')+' · '+fmtNum(en.city_entries)+' 条')))
+        : '<span class="warn">不可用</span> —— 同步 DB-IP City 或上传 GeoLite2')
     + '</tbody></table>';
 
   $('#set-sys').innerHTML =
@@ -622,6 +643,68 @@ $('#addcond').onclick=addCond;
 $('#e-run').onclick=runExplore;
 $('#e-explain').onclick=explainExplore;
 
+let SYNC_TIMER = null;
+
+async function loadSources(){
+  const d = await api('/api/v1/enrich/sources');
+  if(!d) return;
+  renderSyncStatus(d.status);
+
+  let h='';
+  for(const s of d.sources){
+    const kindLabel = {asn:'ASN 类', city:'城市类', city_text:'城市类(中文文本)'}[s.kind]||s.kind;
+    h += '<div class="src"><div class="top">'
+      + '<span class="nm">'+esc(s.name)+'</span>'
+      + '<span class="tag">'+esc(kindLabel)+'</span>'
+      + '<span class="lic">'+esc(s.license)+'</span>'
+      + '<button class="act" data-sync="'+esc(s.id)+'">同步</button>'
+      + '</div>'
+      + '<div class="fl">填充字段:'+esc(s.fields)+'</div>'
+      + '<div class="nt">'+esc(s.note)+'</div></div>';
+  }
+  $('#sync-list').innerHTML=h;
+  $('#sync-list').querySelectorAll('[data-sync]').forEach(b=>b.onclick=()=>doSync(b.dataset.sync));
+}
+
+function renderSyncStatus(st){
+  const el = $('#sync-status');
+  if(!st || (!st.in_progress && !st.finished_at && !st.error)){ el.innerHTML=''; return; }
+  if(st.in_progress){
+    el.innerHTML='<p class="hint">正在同步 <b>'+esc(st.source_id)+'</b>… '
+      + '下载中,大的库可能要几分钟</p>';
+    return;
+  }
+  if(st.error){
+    el.innerHTML='<div class="err" style="display:block">同步 '+esc(st.source_id)
+      +' 失败:'+esc(st.error)+'</div>';
+    return;
+  }
+  el.innerHTML='<p class="hint"><span class="ok">✓</span> '+esc(st.source_id)
+    +' 已同步:'+fmtNum(st.entries)+' 条记录,'+fmtBytes(st.bytes)+'</p>';
+}
+
+async function doSync(id){
+  showErr('');
+  try{
+    await api('/api/v1/enrich/sync', {id});
+  }catch(e){ showErr(e.message); return; }
+  // 轮询进度。同步是后台跑的 —— city 库几十 MB,在带宽受限的机房里
+  // 要几分钟,而反向代理通常 60 秒就切断连接。
+  if(SYNC_TIMER) clearInterval(SYNC_TIMER);
+  SYNC_TIMER = setInterval(async()=>{
+    try{
+      const d = await api('/api/v1/enrich/sources');
+      if(!d) return;
+      renderSyncStatus(d.status);
+      if(!d.status.in_progress){
+        clearInterval(SYNC_TIMER); SYNC_TIMER=null;
+        await loadOverview(); await loadFields();
+      }
+    }catch(e){ clearInterval(SYNC_TIMER); SYNC_TIMER=null; showErr(e.message); }
+  }, 2000);
+  await loadSources();
+}
+
 $('#mmdbup').onclick=async()=>{
   const f=$('#mmdbfile').files[0];
   if(!f){ showErr('请先选择 .mmdb 文件'); return; }
@@ -649,7 +732,8 @@ function current(){ return document.querySelector('nav button.on').dataset.t; }
 
 function load(tab){
   const f={dash:loadDash,hosts:loadHosts,conv:loadConv,geo:loadGeo,
-           explore:()=>{},settings:loadOverview}[tab];
+           explore:()=>{},
+           settings:async()=>{ await loadOverview(); await loadSources(); }}[tab];
   if(f) Promise.resolve(f()).catch(e=>showErr(e.message));
 }
 
