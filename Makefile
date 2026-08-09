@@ -56,7 +56,16 @@ bpf-verify:
 ##
 ## 每个包里是 ntop2ban + 对应架构的 clickhouse 静态二进制,解压即可运行。
 ## clickhouse 按需下载(不入库,200MB 级),CH_URL_AMD64/ARM64 可覆盖。
-CH_URL_AMD64 ?= https://builds.clickhouse.com/master/amd64/clickhouse
+##
+## amd64 用官方的 **amd64compat** 构建,不是 amd64。
+##
+## 理由:默认的 amd64 构建要求 x86-64-v2(SSE4.2/POPCNT),在较老的物理机
+## 与屏蔽了这些指令的虚拟机上一执行就被内核 SIGILL 掉,表现为
+## "Illegal instruction (core dumped)"。用最激进的构建去打一个
+## "拷过去就跑"的包,本身就与那个承诺矛盾——而用户拿到的错误信息完全
+## 指不到"换个 clickhouse 构建"这个方向。amd64compat 是纯 SSE2 构建,
+## 牺牲一点性能换普遍可运行,对单机部署这是正确的取舍。
+CH_URL_AMD64 ?= https://builds.clickhouse.com/master/amd64compat/clickhouse
 CH_URL_ARM64 ?= https://builds.clickhouse.com/master/aarch64/clickhouse
 
 release: check

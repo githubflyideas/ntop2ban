@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -24,6 +26,12 @@ type Managed struct {
 	cmd     *exec.Cmd
 	dataDir string
 	binPath string
+
+	// waited 记录 Wait 是否已被调用。waitReady 为了能立刻发现子进程
+	// 异常退出,自己起了一个 goroutine 调 Wait;Stop 因此不能再调一次
+	// (第二次会返回 "wait: no child processes",掩盖真正的停止结果)。
+	mu     sync.Mutex
+	waited bool
 
 	TCPPort  int
 	HTTPPort int
@@ -130,28 +138,92 @@ func StartManaged(ctx context.Context, cfg ManagedConfig) (*Managed, error) {
 // 用真正的连接而不是"进程还活着"作判据:server 起来到端口开始 accept
 // 之间有一段初始化时间(要加载 schema、恢复 part),过早连接会
 // connection refused。首次启动在慢磁盘上可能要十几秒,所以给到 60 秒。
+//
+// 但"进程还活着"必须单独监测:子进程被信号打死时(最常见的是 CPU 不
+// 支持二进制所需的指令集,得到 SIGILL),它连日志都来不及写,傻等 60 秒
+// 然后说"检查日志"是最糟的反馈——那个日志文件是空的。所以这里用一个
+// goroutine 收 Wait 结果,一旦退出立刻把退出状态与 stderr 尾部一起报出来。
 func (m *Managed) waitReady(ctx context.Context) error {
+	exited := make(chan error, 1)
+	go func() { exited <- m.cmd.Wait() }()
+
 	deadline := time.Now().Add(60 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case werr := <-exited:
+			m.waited = true
+			return m.explainEarlyExit(werr)
 		default:
 		}
-		if m.cmd.ProcessState != nil && m.cmd.ProcessState.Exited() {
-			return fmt.Errorf("store: clickhouse 在就绪前退出,检查 %s/log/stderr.log", m.dataDir)
-		}
+
 		probe, err := Open(ctx, Config{Addr: m.Addr(), Database: "default"})
 		if err == nil {
 			probe.Close()
+			// 就绪之后把 Wait 的所有权交回 Stop:它需要靠 Wait 回收
+			// 进程,不能被这里的 goroutine 抢走。
+			go func() { <-exited; m.markWaited() }()
 			return nil
 		}
 		lastErr = err
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("store: 等待 clickhouse 就绪超时(60s),检查 %s/log/stderr.log: %w",
-		m.dataDir, lastErr)
+	return fmt.Errorf("store: 等待 clickhouse 就绪超时(60s): %w\n%s",
+		lastErr, m.tailStderr())
+}
+
+// explainEarlyExit 把子进程的异常退出翻译成能直接定位问题的说明。
+func (m *Managed) explainEarlyExit(werr error) error {
+	var detail string
+	if ee, ok := werr.(*exec.ExitError); ok {
+		detail = ee.ProcessState.String() // 例如 "signal: illegal instruction"
+	} else if werr != nil {
+		detail = werr.Error()
+	} else {
+		detail = "正常退出"
+	}
+
+	// SIGILL 几乎总是同一个原因,直接给出解决办法而不是让用户去搜。
+	hint := ""
+	if strings.Contains(detail, "illegal instruction") {
+		hint = "\n\n这台机器的 CPU 不支持该 clickhouse 构建所需的指令集" +
+			"(常见于较老的物理机或屏蔽了 SSE4.2 的虚拟机)。" +
+			"\n请换用官方的兼容构建:" +
+			"\n  curl -L -o clickhouse https://builds.clickhouse.com/master/amd64compat/clickhouse" +
+			"\n  chmod +x clickhouse"
+	}
+
+	return fmt.Errorf("store: clickhouse 启动即退出(%s)%s\n%s",
+		detail, hint, m.tailStderr())
+}
+
+// tailStderr 读 stderr 日志的尾部。
+//
+// 把它带进错误信息里而不是让用户自己去 tail:排查一个启动失败不该需要
+// 先知道日志在哪。文件不存在或为空是正常情况(进程死在 exec 阶段时
+// 什么都没来得及写),那时明确说出来,免得用户以为是自己找错了文件。
+func (m *Managed) tailStderr() string {
+	path := filepath.Join(m.dataDir, "log", "stderr.log")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("(读不到 %s: %v)", path, err)
+	}
+	if len(b) == 0 {
+		return fmt.Sprintf("(%s 为空——进程可能在写日志之前就被终止了)", path)
+	}
+	const maxTail = 2000
+	if len(b) > maxTail {
+		b = b[len(b)-maxTail:]
+	}
+	return "--- " + path + " 尾部 ---\n" + string(b)
+}
+
+func (m *Managed) markWaited() {
+	m.mu.Lock()
+	m.waited = true
+	m.mu.Unlock()
 }
 
 // Addr 返回 native protocol 地址。
@@ -172,22 +244,23 @@ func (m *Managed) Stop(timeout time.Duration) error {
 		_ = m.cmd.Process.Signal(syscall.SIGTERM)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- m.cmd.Wait() }()
-
-	select {
-	case <-time.After(timeout):
-		if pgErr == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			_ = m.cmd.Process.Kill()
+	// Wait 已经被 waitReady 的 goroutine 接管,这里只能等进程消失,
+	// 不能再 Wait 一次。用轮询 Signal(0) 判断存活:对已回收的进程
+	// Signal 会返回 os.ErrProcessDone。
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := m.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			return nil // 已退出
 		}
-		<-done
-		return fmt.Errorf("store: clickhouse 优雅停止超时,已强制杀死(下次启动会做 part 恢复)")
-	case <-done:
-		// Wait 对被信号终止的进程返回非 nil error,这是预期的。
-		return nil
+		time.Sleep(100 * time.Millisecond)
 	}
+
+	if pgErr == nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	} else {
+		_ = m.cmd.Process.Kill()
+	}
+	return fmt.Errorf("store: clickhouse 优雅停止超时,已强制杀死(下次启动会做 part 恢复)")
 }
 
 // renderServerConfig 生成最小 config.xml。

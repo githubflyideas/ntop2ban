@@ -47,9 +47,15 @@ ntop2ban-linux-amd64/
 └── clickhouse    # 官方静态二进制,由 ntop2ban 自动拉起托管
 ```
 
-压缩包 183MB(clickhouse 那个文件本身 183MB,首次运行时自解压到 771MB)。
+压缩包约 208MB(clickhouse 那个文件本身 176MB,首次运行时自解压到 771MB)。
 这是"不装数据库"的代价:ClickHouse 是唯一存储,没有兜底后端,所以它必须
 在包里。
+
+包里的 clickhouse 用的是官方 **amd64compat** 构建(纯 SSE2),不是默认的
+amd64 构建。后者要求 x86-64-v2(SSE4.2/POPCNT),在较老的物理机和屏蔽了
+这些指令的虚拟机上一执行就 `Illegal instruction (core dumped)` —— 而那个
+错误完全指不到"换个 clickhouse 构建"这个方向。牺牲一点性能换普遍可运行,
+对单机部署是正确的取舍。
 
 不想下这么大的话,单独下主程序(9MB)接外部 ClickHouse:
 
