@@ -12,8 +12,6 @@ import (
 
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
-
-	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
 
 // afPacketSource 是不依赖 XDP 的兼容层:AF_PACKET socket + cBPF 过滤。
@@ -35,8 +33,6 @@ type afPacketSource struct {
 
 	flushInterval time.Duration
 }
-
-const ethHdrLen = 14
 
 func openAFPacket(cfg Config, lg *log.Logger) (Source, error) {
 	n := cfg.SamplingN
@@ -123,56 +119,6 @@ func (s *afPacketSource) Close() error {
 	return nil
 }
 
-// sampleFilterInstructions 生成采样过滤器:1/N 抽样 → IPv4 → 非分片 →
-// TCP/UDP。
-//
-// 抽样判定刻意放在最前面:它会丢掉 (N-1)/N 的包,先抽样能省下绝大部分
-// 后续指令的执行。
-func sampleFilterInstructions(samplingN int) []bpf.Instruction {
-	var insts []bpf.Instruction
-
-	if samplingN > 1 {
-		// ExtRand 是内核提供的均匀随机数(cBPF 的 Linux 扩展)。
-		// rand % N != 0 就丢弃——判定在内核完成,不命中的包根本不会
-		// 拷到用户态。这正是 tcpdump 做采样的办法。
-		insts = append(insts,
-			bpf.LoadExtension{Num: bpf.ExtRand},
-			bpf.ALUOpConstant{Op: bpf.ALUOpMod, Val: uint32(samplingN)},
-			bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0},
-		)
-	}
-
-	insts = append(insts,
-		bpf.LoadAbsolute{Off: 12, Size: 2},
-		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0x0800},
-		bpf.LoadAbsolute{Off: ethHdrLen + 6, Size: 2},
-		bpf.JumpIf{Cond: bpf.JumpBitsSet, Val: 0x1fff},
-		bpf.LoadAbsolute{Off: ethHdrLen + 9, Size: 1},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: unix.IPPROTO_TCP},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: unix.IPPROTO_UDP},
-	)
-
-	rejectIdx := len(insts)
-	acceptIdx := rejectIdx + 1
-	insts = append(insts, bpf.RetConstant{Val: 0}, bpf.RetConstant{Val: 0xffff})
-
-	// 回填跳转距离。不手算偏移——算错了不会报错,过滤器只会静默
-	// 放行或丢弃错误的包,线上表现为"统计数字不对"却无从追查。
-	for i, in := range insts {
-		j, ok := in.(bpf.JumpIf)
-		if !ok {
-			continue
-		}
-		if j.Cond == bpf.JumpEqual && (j.Val == unix.IPPROTO_TCP || j.Val == unix.IPPROTO_UDP) {
-			j.SkipTrue = uint8(acceptIdx - i - 1)
-		} else {
-			j.SkipTrue = uint8(rejectIdx - i - 1)
-		}
-		insts[i] = j
-	}
-	return insts
-}
-
 func assembleSampleFilter(samplingN int) (*unix.SockFprog, error) {
 	raw, err := bpf.Assemble(sampleFilterInstructions(samplingN))
 	if err != nil {
@@ -185,39 +131,8 @@ func assembleSampleFilter(samplingN int) (*unix.SockFprog, error) {
 	return &unix.SockFprog{Len: uint16(len(filters)), Filter: &filters[0]}, nil
 }
 
-// toObservation 把 flow.ParseEthernet 的结果转成聚合器要的形态。
-//
-// 解析本身在 internal/flow 里,三种输入(AF_PACKET / sFlow / XDP)共用
-// 同一份实现——各自写一份迟早会在"长度算不算以太网头""分片怎么处理"
-// 这类细节上分叉,而分叉的表现是同一份流量在不同输入下显示出不同数字,
-// 没有任何报错。
-func toObservation(frame []byte) (Observation, error) {
-	var o Observation
-	p, err := flow.ParseEthernet(frame)
-	if err != nil {
-		return o, err
-	}
-	if v4 := p.SrcIP.To4(); v4 != nil {
-		copy(o.SrcIP[:], v4)
-	}
-	if v4 := p.DstIP.To4(); v4 != nil {
-		copy(o.DstIP[:], v4)
-	}
-	o.SrcPort, o.DstPort = p.SrcPort, p.DstPort
-	o.Proto, o.Length = p.Protocol, p.Length
-	o.TCPFlags, o.VLAN = p.TCPFlags, p.VLAN
-	return o, nil
-}
-
 func htons(v uint16) uint16 { return v<<8 | v>>8 }
 
 func isTimeout(err error) bool {
 	return errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR)
-}
-
-func deviceLabel(iface string, m Mode) string {
-	if iface == "" {
-		iface = "any"
-	}
-	return iface + "(" + string(m) + ")"
 }

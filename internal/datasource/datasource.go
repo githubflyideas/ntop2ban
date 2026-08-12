@@ -97,8 +97,11 @@ func (e *ErrUnavailable) Error() string {
 func (e *ErrUnavailable) Unwrap() error { return e.Reason }
 
 // attemptOrder 返回要依次尝试的层级。
+//
+// 候选集合由 supportedModes 给出,它按平台定义(见 open.go)。降级顺序的策略——默认从最好的一级往下试、显式指定
+// 就只试那一级——是与平台无关的,所以留在这里。
 func attemptOrder(prefer Mode) []Mode {
-	all := []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket}
+	all := supportedModes
 	if prefer == "" {
 		return all
 	}

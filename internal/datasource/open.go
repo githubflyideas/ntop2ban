@@ -7,6 +7,9 @@ import (
 	"log"
 )
 
+// supportedModes 是本平台可用的观测层级,按优先级从高到低。
+var supportedModes = []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket}
+
 var errNoSink = errors.New("datasource: 必须提供 Sink")
 
 // Open 按 native → generic → af-packet 顺序尝试,返回第一个可用的数据源。

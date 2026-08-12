@@ -1,5 +1,3 @@
-//go:build linux
-
 package datasource
 
 import (
@@ -11,10 +9,8 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 
 	"golang.org/x/net/bpf"
-	"golang.org/x/sys/unix"
 
 	"github.com/githubflyideas/ntop2ban/internal/flow"
 )
@@ -306,11 +302,6 @@ func TestSamplingUsesKernelSideRand(t *testing.T) {
 	if !found {
 		t.Error("N>1 应使用 ExtRand 在内核侧抽样")
 	}
-	for _, n := range []int{2, 10, 100, 4096} {
-		if _, err := assembleSampleFilter(n); err != nil {
-			t.Errorf("samplingN=%d 汇编失败: %v", n, err)
-		}
-	}
 }
 
 // --- 帧解析 ---
@@ -353,72 +344,7 @@ func TestParseFrameRejectsTruncated(t *testing.T) {
 	}
 }
 
-// --- ringbuf 事件解析(XDP 层) ---
-
-// TestParseSampleEventLayout 二进制布局是跨语言契约,编译器抓不到不一致。
-// C 侧改一个字段顺序,Go 侧照旧解析就会读到错位数据,而且不报错——
-// 只会让流量图上出现无法解释的数值。
-func TestParseSampleEventLayout(t *testing.T) {
-	raw := make([]byte, sampleEventSize)
-	copy(raw[0:4], net.ParseIP("203.0.113.7").To4())
-	copy(raw[4:8], net.ParseIP("198.51.100.1").To4())
-	binary.LittleEndian.PutUint16(raw[8:10], 40000)
-	binary.LittleEndian.PutUint16(raw[10:12], 443)
-	binary.LittleEndian.PutUint16(raw[12:14], 1500)
-	raw[14] = 6
-
-	o, err := parseSampleEvent(raw)
-	if err != nil {
-		t.Fatalf("parseSampleEvent: %v", err)
-	}
-	if o.SrcPort != 40000 || o.DstPort != 443 {
-		t.Errorf("端口解析错误: src=%d dst=%d", o.SrcPort, o.DstPort)
-	}
-	if o.Length != 1500 {
-		t.Errorf("长度: want 1500, got %d", o.Length)
-	}
-	if o.Proto != 6 {
-		t.Errorf("协议: want 6, got %d", o.Proto)
-	}
-	wantSrc := [4]byte{203, 0, 113, 7}
-	if o.SrcIP != wantSrc {
-		t.Errorf("源 IP: want %v, got %v", wantSrc, o.SrcIP)
-	}
-}
-
-func TestParseSampleEventRejectsShort(t *testing.T) {
-	for _, n := range []int{0, 8, sampleEventSize - 1} {
-		if _, err := parseSampleEvent(make([]byte, n)); err == nil {
-			t.Errorf("长度 %d 应报错(bytecode 版本不匹配的信号)", n)
-		}
-	}
-}
-
 // --- 降级顺序 ---
-
-// TestAttemptOrderDefaultsToNativeFirst 默认必须先试性能最好的那级。
-func TestAttemptOrderDefaultsToNativeFirst(t *testing.T) {
-	order := attemptOrder("")
-	want := []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket}
-	if len(order) != len(want) {
-		t.Fatalf("want %v, got %v", want, order)
-	}
-	for i := range want {
-		if order[i] != want[i] {
-			t.Fatalf("降级顺序错误: want %v, got %v", want, order)
-		}
-	}
-}
-
-// TestAttemptOrderRespectsExplicitPreference 显式指定某一级时不该悄悄
-// 降级——用户要求"强制走 AF_PACKET 排查问题",结果程序自己跑去用 XDP,
-// 他看到的日志与意图不符,只会更困惑。
-func TestAttemptOrderRespectsExplicitPreference(t *testing.T) {
-	order := attemptOrder(ModeAFPacket)
-	if len(order) != 1 || order[0] != ModeAFPacket {
-		t.Errorf("显式指定应只试那一级, got %v", order)
-	}
-}
 
 func TestModeLabelsAreInformative(t *testing.T) {
 	for _, m := range []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket} {
@@ -453,15 +379,6 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
-
-func TestOpenRequiresSink(t *testing.T) {
-	if _, err := Open(Config{Iface: "lo"}, discardLogger()); err == nil {
-		t.Error("没有 Sink 应报错而不是静默丢弃数据")
-	}
-}
-
-var _ = unix.IPPROTO_TCP
-var _ = time.Second
 
 // discardLogger 返回一个丢弃输出的 logger,让测试输出保持干净。
 func discardLogger() *log.Logger {

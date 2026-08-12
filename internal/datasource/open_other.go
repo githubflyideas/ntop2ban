@@ -19,6 +19,8 @@ import (
 // 说得清原因的中文,不是一屏 undefined: unix.AF_PACKET。
 var ErrUnsupportedPlatform = errors.New("datasource: 本机抓包(XDP / AF_PACKET)只在 Linux 上可用,当前平台请用 -input netflow 或 -input sflow")
 
+var supportedModes []Mode
+
 func Open(cfg Config, lg *log.Logger) (Source, error) {
 	return nil, ErrUnsupportedPlatform
 }
