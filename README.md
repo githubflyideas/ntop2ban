@@ -50,20 +50,36 @@ ntop2ban-linux-amd64/
 压缩包约 208MB(clickhouse 那个文件本身 176MB,首次运行时自解压到 771MB)。
 
 Release 里另有 `ntop2ban-darwin-arm64` / `ntop2ban-darwin-amd64` 两个裸
-二进制(不带 clickhouse)。**macOS 上只能收 sFlow/NetFlow,不能 `-input
-local`** —— XDP 与 AF_PACKET 是 Linux 内核接口,没有跨平台对应物。Mac 版
-存在的意义是拿一台笔记本就能把"收流 → 存 → 查 → 看图"这条链路跑通:
+二进制(不带 clickhouse):
 
 ```bash
 # clickhouse 自己下一个 darwin 构建,ntop2ban 负责拉起与托管
 curl -L -o clickhouse https://builds.clickhouse.com/master/macos-aarch64/clickhouse
 chmod +x clickhouse && xattr -d com.apple.quarantine clickhouse   # 绕过 Gatekeeper
 xattr -d com.apple.quarantine ntop2ban-darwin-arm64
-./ntop2ban-darwin-arm64 -input netflow -clickhouse-bin ./clickhouse user=admin passwd=你的密码
+sudo ./ntop2ban-darwin-arm64 -iface en0 -clickhouse-bin ./clickhouse user=admin passwd=你的密码
 ```
 
-不加 `-input netflow` 也能起来:`local` 会打印一行"本机采集未启动:
-……只在 Linux 上可用"然后继续,界面和其他输入源照常可用。
+macOS 上三种输入都能用,包括 `-input local`:本机抓包走 `/dev/bpf`,也就是
+libpcap 在 Mac 上用的那套设施 —— BPF 本来就是 BSD 的东西,Linux 的
+AF_PACKET + cBPF 是后来的仿制。纯 Go 实现,不需要 cgo。
+
+两点与 Linux 不同,都会影响你看到的数字:
+
+**必须指定 `-iface`。** `BIOCSETIF` 是打开 BPF 设备的必要一步,没有
+"监听全部网卡"这个语义。`ifconfig` 看名字,通常是 `en0`。
+
+**抽样在用户态做,所以 `-sampling` 不再免费。** Linux 侧靠 cBPF 的
+`ExtRand` 扩展在内核里就丢掉 (N-1)/N 的包;BSD 的 BPF 解释器没有随机数
+扩展,判定只能等包拷到用户态之后。统计外推照旧成立,但每个通过过滤器的
+包都付了一次拷贝,高流量下 CPU 开销明显高于 Linux。程序启动时会把这件事
+打进日志。
+
+还需要 root:`/dev/bpf*` 默认是 `root:wheel 0600`(Wireshark 装那个
+ChmodBPF 启动项就是为这个)。不想用 `sudo` 就把设备属主改成当前用户。
+
+macOS 上唯一真正缺的是 XDP —— 内核里没有可编程快路径这种东西,`-datasource
+xdp-native` 之类在 Mac 上不存在,只有 `bpf-device` 一级。
 这是"不装数据库"的代价:ClickHouse 是唯一存储,没有兜底后端,所以它必须
 在包里。
 
@@ -114,7 +130,7 @@ sudo ./ntop2ban -iface eth0 user=admin passwd=你的密码
 
 | 输入 | 适用 | 说明 |
 |---|---|---|
-| `local` | 单机、NAS、家用 | XDP/eBPF 抓本机网卡,不需要交换机配合;**仅 Linux** |
+| `local` | 单机、NAS、家用 | 抓本机网卡,不需要交换机配合。Linux 走 XDP/eBPF,macOS 走 `/dev/bpf` |
 | `sflow` | IDC、企业交换网络 | 远端设备 UDP 送采样包头,默认 6343 |
 | `netflow` | 同上 | NetFlow v5,默认 2055 |
 
@@ -149,8 +165,9 @@ Observe/Analyze,所以它不需要跟任何封禁程序争抢网卡挂载点。
 | **xdp-native** | 驱动层处理,性能最佳。需要网卡驱动支持 |
 | **xdp-generic** | 内核在 `netif_receive_skb` 处模拟。任何网卡都能挂,但已在 `sk_buff` 分配之后。veth、容器、部分云主机常只能走这级 |
 | **af-packet** | 完全不用 XDP。内核太老、XDP 被占用或权限受限时的退路。抽样判定仍在内核侧完成(cBPF 的 `ExtRand`) |
+| **bpf-device** | macOS/BSD 上唯一的一级,`/dev/bpf` + cBPF。不与上面三级构成降级关系:XDP 在 macOS 上不存在,而 BPF 是 BSD 原生设施。抽样在用户态 |
 
-**三级产出完全相同的 Canonical Flow**,用的是同一份包解析
+**各级产出完全相同的 Canonical Flow**,用的是同一份包解析
 (`internal/flow`)与同一个聚合器。三处各写一份解析迟早会在"长度算不算
 以太网头""分片怎么处理"这类细节上分叉,而分叉的表现是同一份流量在
 不同输入方式下显示出不同数字,没有任何报错。

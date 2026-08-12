@@ -37,9 +37,9 @@ func main() {
 
 		input = flag.String("input", "local", "输入源:local(本机抓包)| sflow | netflow;逗号分隔可同时启用")
 
-		iface   = flag.String("iface", "", "本机抓包的网卡。XDP 模式必须指定")
+		iface   = flag.String("iface", "", "本机抓包的网卡。XDP 与 macOS 的 BPF 设备都必须指定")
 		sampleN = flag.Int("sampling", 100, "本机抓包的抽样率 1/N;1 表示全量")
-		prefer  = flag.String("datasource", "", "强制指定本机采集层:xdp-native | xdp-generic | af-packet")
+		prefer  = flag.String("datasource", "", "强制指定本机采集层:xdp-native | xdp-generic | af-packet | bpf-device(macOS)")
 
 		sflowListen   = flag.String("sflow-listen", fmt.Sprintf(":%d", collector.DefaultSFlowPort), "sFlow v5 监听地址")
 		netflowListen = flag.String("netflow-listen", fmt.Sprintf(":%d", collector.DefaultNetFlowPort), "NetFlow v5 监听地址")

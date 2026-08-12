@@ -347,7 +347,7 @@ func TestParseFrameRejectsTruncated(t *testing.T) {
 // --- 降级顺序 ---
 
 func TestModeLabelsAreInformative(t *testing.T) {
-	for _, m := range []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket} {
+	for _, m := range []Mode{ModeXDPNative, ModeXDPGeneric, ModeAFPacket, ModeBPFDevice} {
 		if m.Label() == string(m) {
 			t.Errorf("%s 应有可读的说明文字(运维需要知道性能差异)", m)
 		}

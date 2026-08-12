@@ -33,6 +33,14 @@ const (
 	ModeXDPNative  Mode = "xdp-native"
 	ModeXDPGeneric Mode = "xdp-generic"
 	ModeAFPacket   Mode = "af-packet"
+
+	// ModeBPFDevice 是 macOS(以及其他 BSD)上的 /dev/bpf 抓包。
+	//
+	// 它不是前三级的降级目标,而是另一套操作系统上唯一的那一级:
+	// XDP 在 macOS 上没有任何对应物,而 BPF 本来就是 BSD 的东西,
+	// Linux 的 AF_PACKET + cBPF 是后来的仿制。所以这一档与 AF_PACKET
+	// 大致同级,不与它构成降级关系。
+	ModeBPFDevice Mode = "bpf-device"
 )
 
 // Label 返回给界面展示的说明文字。
@@ -48,6 +56,8 @@ func (m Mode) Label() string {
 		return "XDP generic(内核模拟层,网卡驱动不支持 native)"
 	case ModeAFPacket:
 		return "AF_PACKET(未使用 XDP,兼容模式)"
+	case ModeBPFDevice:
+		return "BPF 设备(macOS/BSD,抽样在用户态完成)"
 	default:
 		return string(m)
 	}
@@ -98,7 +108,8 @@ func (e *ErrUnavailable) Unwrap() error { return e.Reason }
 
 // attemptOrder 返回要依次尝试的层级。
 //
-// 候选集合由 supportedModes 给出,它按平台定义(见 open.go)。降级顺序的策略——默认从最好的一级往下试、显式指定
+// 候选集合由 supportedModes 给出,它按平台定义(见 open_linux.go /
+// open_darwin.go)。降级顺序的策略——默认从最好的一级往下试、显式指定
 // 就只试那一级——是与平台无关的,所以留在这里。
 func attemptOrder(prefer Mode) []Mode {
 	all := supportedModes
