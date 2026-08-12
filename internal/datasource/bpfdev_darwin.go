@@ -27,12 +27,14 @@ import (
 //
 // 一是抽样在用户态做。Linux 侧靠 cBPF 的 ExtRand 扩展在内核里丢掉
 // (N-1)/N 的包,BSD 的 BPF 解释器没有随机数扩展,判定只能等包拷到用户
-// 态之后。统计外推依然成立(聚合器照样乘 N),但 -sampling-n 在 macOS 上
-// 不再是"免费"的:每个通过过滤器的包都付了一次拷贝。
+// 态之后。统计外推依然成立(聚合器照样乘 N),但 -sampling 在 macOS 上不再
+// 是"免费"的:每个通过过滤器的包都付了一次拷贝。所以这边的默认值是 1,
+// 见 sampling_default.go。
 //
 // 二是链路层类型不能假设。en0 是以太网,lo0 是 DLT_NULL,utun* 是
-// DLT_RAW;而 cBPF 过滤器里的偏移量是按以太网写的,所以过滤器只在
-// DLT_EN10MB 下挂载,其余类型放全量进来由用户态解析筛。
+// DLT_RAW;而 cBPF 过滤器里的偏移量是按以太网写的,所以只有 DLT_EN10MB 挂
+// 完整的筛选过滤器,其余类型挂一个只有 ret #snapLen 的过滤器 —— 不筛协议,
+// 但让内核照样只拷包头 —— 协议筛选交给用户态。
 //
 // 实现刻意只用标准库 syscall 而不是 x/sys/unix:BIOCSETIF、BIOCIMMEDIATE
 // 这套 ioctl 的封装只有标准库有(syscall/bpf_bsd.go),而两个包的 Errno
@@ -215,8 +217,9 @@ func (s *bpfDevSource) Run(ctx context.Context) error {
 	go s.agg.runFlushLoop(ctx, s.flushInterval)
 
 	if s.samplingN > 1 {
-		s.log.Printf("[flow] macOS 上抽样(1/%d)在用户态完成——BSD 的 BPF 无内核随机数扩展,"+
-			"统计外推不受影响,但高流量下 CPU 开销高于 Linux", s.samplingN)
+		s.log.Printf("[flow] 抽样 1/%d 在用户态完成——BSD 的 BPF 无内核随机数扩展,"+
+			"这边抽样省不下内核那几笔开销,却让统计误差按 1/sqrt(计入包数) 放大。"+
+			"macOS 上建议保持默认的 -sampling 1", s.samplingN)
 	}
 	if s.dlt != dltEthernet {
 		s.log.Printf("[flow] 网卡 %s 的链路层类型 DLT=%d 非以太网,内核只做截断不做协议筛选,"+

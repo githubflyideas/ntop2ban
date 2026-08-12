@@ -18,7 +18,7 @@ ntop2ban —— 解压即跑(macOS)
 跑起来
 ------
 
-    sudo ./ntop2ban -iface en0 -sampling 1
+    sudo ./ntop2ban -iface en0
 
 然后浏览器打开 http://localhost:8090
 
@@ -32,9 +32,10 @@ macOS 上与 Linux 的三点差异
    这个语义,必须绑定一块。en0 是无线/有线主网卡,lo0 是本机回环,
    utun* 是 VPN 隧道。ifconfig -l 可以列出来。
 
-2) 建议 -sampling 1(全量)。抽样在 macOS 上只能在用户态做——BSD 的 BPF
-   没有内核随机数扩展——所以内核该拷的包照拷,省下来的只有解析和聚合那
-   一点 CPU,却要付上统计精度的代价。Mac 上的流量本来就不大,不值当。
+2) 不用管 -sampling,macOS 上它默认就是 1(全量)。抽样在这边只能在用户
+   态做——BSD 的 BPF 没有内核随机数扩展——所以内核该拷的包照拷,省下来的
+   只有解析和聚合那一点 CPU,却要付上统计精度的代价。Mac 上的流量本来
+   就不大,不值当。Linux 那边默认仍是 1/100,因为那边是在内核里丢包。
 
 3) 需要 sudo。/dev/bpf* 默认只有 root 可读。想免 sudo 就装 Wireshark 的
    ChmodBPF,或者自己给这些设备加个属于你的用户组。

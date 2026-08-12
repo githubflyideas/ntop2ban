@@ -61,7 +61,7 @@ curl -L -o ntop2ban.tar.gz https://github.com/githubflyideas/ntop2ban/releases/l
 tar xzf ntop2ban.tar.gz
 xattr -dr com.apple.quarantine ntop2ban-darwin-arm64     # 这一步必须做
 cd ntop2ban-darwin-arm64
-sudo ./ntop2ban -iface en0 -sampling 1 user=admin passwd=你的密码
+sudo ./ntop2ban -iface en0 user=admin passwd=你的密码
 ```
 
 `xattr -dr` 不能省。浏览器下载的压缩包会被打上 `com.apple.quarantine`,
@@ -78,13 +78,16 @@ AF_PACKET + cBPF 是后来的仿制。纯 Go 实现,不需要 cgo。
 **必须指定 `-iface`。** `BIOCSETIF` 是打开 BPF 设备的必要一步,没有
 "监听全部网卡"这个语义。`ifconfig` 看名字,通常是 `en0`。
 
-**抽样在用户态做,所以 Mac 上建议直接 `-sampling 1` 全量。** Linux 侧靠
+**抽样在用户态做,所以 macOS 上 `-sampling` 默认就是 1(全量),不用自己
+写。** Linux 侧靠
 cBPF 的 `ExtRand` 扩展在内核里就丢掉 (N-1)/N 的包;BSD 的 BPF 解释器没有
 随机数扩展,判定只能等包拷到用户态之后。于是内核那侧的过滤、按 caplen 的
 拷贝、缓冲区占用、read 系统调用,每个包都照付,N 是多少都一样 —— 抽样省
 下来的只有头部解析与聚合那部分 CPU,而代价是短流会成片消失、且内核缓冲
 溢出丢的包会被乘回 N 倍放大。Mac 与家用 NAS 的绝对包速本来就不高,这笔
-交换不值当。程序启动时会把"抽样在用户态完成"打进日志。
+交换不值当,所以默认值直接按平台分开:Linux 100、macOS 1。真要在 Mac 上
+抽样,显式给 `-sampling N` 仍然生效,启动时会打一行日志说明它是在用户态
+完成的。
 
 还需要 root:`/dev/bpf*` 默认是 `root:wheel 0600`(Wireshark 装那个
 ChmodBPF 启动项就是为这个)。不想用 `sudo` 就把设备属主改成当前用户。
@@ -294,7 +297,7 @@ query benchmark 决定,而不是凭经验。
 | `-addr` | `:8090` | Web 监听地址 |
 | `-input` | `local` | 输入源:`local` / `sflow` / `netflow`,逗号分隔 |
 | `-iface` | 空 | 本机抓包的网卡。XDP 模式必须指定 |
-| `-sampling` | `100` | 本机抓包抽样率 1/N;`1` 表示全量 |
+| `-sampling` | Linux `100` / macOS `1` | 本机抓包抽样率 1/N;`1` 表示全量。macOS 默认全量的理由见上文 |
 | `-datasource` | 空(自动降级) | 强制 `xdp-native` / `xdp-generic` / `af-packet` |
 | `-sflow-listen` | `:6343` | sFlow v5 监听地址 |
 | `-netflow-listen` | `:2055` | NetFlow v5 监听地址 |

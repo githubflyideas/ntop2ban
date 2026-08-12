@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -489,4 +490,30 @@ func contains(s, sub string) bool {
 // discardLogger 返回一个丢弃输出的 logger,让测试输出保持干净。
 func discardLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
+}
+
+// --- 抽样默认值 ---
+
+// TestDefaultSamplingIsPlatformDependent macOS 上默认全量,Linux 上默认 1/100。
+//
+// 这不是口味问题。Linux 的抽样判定在内核里(cBPF 的 ExtRand),没被选中的包
+// 连拷都不拷,是真省 CPU;BSD 的 BPF 没有这个扩展,判定在用户态,内核过滤、
+// 拷贝、缓冲区、read 系统调用每个包照付,抽样只省下解析与聚合那一小段。在
+// macOS 上默认 1/100 等于白扣 精度:误差按 1/sqrt(计入包数) 走,而这个程序在
+// Mac 上面对的恰好是家里那点流量。
+//
+// 用 defaultSamplingFor(goos) 而不是编译期常量,就是为了这条测试能在任何平台
+// 上把两边的值都验一遍 —— 否则 darwin 那个分支只能靠交叉编译过一眼类型检查。
+func TestDefaultSamplingIsPlatformDependent(t *testing.T) {
+	if got := defaultSamplingFor("darwin"); got != 1 {
+		t.Errorf("macOS 应默认全量, got 1/%d", got)
+	}
+	for _, goos := range []string{"linux", "freebsd", "windows"} {
+		if got := defaultSamplingFor(goos); got <= 1 {
+			t.Errorf("%s 应默认抽样, got 1/%d", goos, got)
+		}
+	}
+	if DefaultSamplingN != defaultSamplingFor(runtime.GOOS) {
+		t.Errorf("DefaultSamplingN 与当前平台不符: %d", DefaultSamplingN)
+	}
 }
