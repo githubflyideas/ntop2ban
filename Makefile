@@ -16,7 +16,7 @@ BPF_SRC := bpf/sampler.c
 BPF_OBJ := internal/datasource/obj/sampler.o
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror
 
-.PHONY: build test check fmt vet bpf bpf-verify release package clean
+.PHONY: build test check fmt vet bpf bpf-verify release package verify-packages clean
 
 build:
 	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o ntop2ban ./cmd/ntop2ban
@@ -65,13 +65,16 @@ bpf-verify:
 ## "拷过去就跑"的包,本身就与那个承诺矛盾——而用户拿到的错误信息完全
 ## 指不到"换个 clickhouse 构建"这个方向。amd64compat 是纯 SSE2 构建,
 ## 牺牲一点性能换普遍可运行,对单机部署这是正确的取舍。
-CH_URL_AMD64 ?= https://builds.clickhouse.com/master/amd64compat/clickhouse
-CH_URL_ARM64 ?= https://builds.clickhouse.com/master/aarch64/clickhouse
+CH_URL_LINUX_AMD64  ?= https://builds.clickhouse.com/master/amd64compat/clickhouse
+CH_URL_LINUX_ARM64  ?= https://builds.clickhouse.com/master/aarch64/clickhouse
+CH_URL_DARWIN_ARM64 ?= https://builds.clickhouse.com/master/macos-aarch64/clickhouse
+## Intel Mac 的目录名是 macos,不是 macos-x86_64 —— 后者 403,别照着
+## aarch64 那个命名去猜。
+CH_URL_DARWIN_AMD64 ?= https://builds.clickhouse.com/master/macos/clickhouse
 
-## darwin 产物只支持 sFlow/NetFlow 输入,不支持 -input local:XDP 与
-## AF_PACKET 是 Linux 内核接口。之所以仍然出 Mac 二进制,是因为"收交换机
-## 导出的流 + 看界面"这条路径与内核无关,而它恰好是最常用的验证方式,
-## 让人为此先找一台 Linux 机器是没必要的门槛。
+## darwin 产物与 Linux 产物功能对等:v0.5.0 起 macOS 上的 -input local
+## 走 /dev/bpf,本机抓包是支持的。缺的只有 XDP(那是 Linux 内核接口),
+## 表现为 Mac 上只有一级采集层可用。
 release: check
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-amd64 ./cmd/ntop2ban
@@ -80,23 +83,60 @@ release: check
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-darwin-amd64 ./cmd/ntop2ban
 	cd dist && sha256sum ntop2ban-linux-* ntop2ban-darwin-* > SHA256SUMS
 
-## package: 组装成 tar.gz。分架构下载 clickhouse —— arm64 包里放 amd64 的
-## 二进制会在目标机上直接 exec 失败,而那个错误很难让人想到是打包错了。
+## package: 组装"解压即跑"的大包 —— 每个包里是 ntop2ban + 同架构的
+## clickhouse 自解压二进制 + 一页 README.txt,单个 160~185MB。
+##
+## 为什么值得出这么大的包:目标使用者是家用 NAS 与 Mac(见 README),那些
+## 机器上装 ClickHouse 要么没有现成的包,要么要先装 docker。让人拷一个目录
+## 进去就能跑起来,是这个项目最省事的入口。已经有 ClickHouse 实例的人走
+## 裸二进制 + -clickhouse-addr,两条路并存。
+##
+## 按架构分别下载 —— arm64 包里放 amd64 的二进制会在目标机上直接 exec
+## 失败,而那个错误很难让人想到是打包错了。打完包 verify-packages 会用
+## file(1) 复核每个包里两个二进制的架构,别跳过。
+##
+## gzip 用 -1:clickhouse 那个自解压二进制本身已经是压缩数据,更高的级别
+## 只是白烧 CPU,换不到几 MB。
+PKG_TARGETS := linux-amd64 linux-arm64 darwin-arm64 darwin-amd64
+
 package: release
-	@for arch in amd64 arm64; do \
-	  d=dist/ntop2ban-linux-$$arch.d; \
-	  rm -rf $$d && mkdir -p $$d; \
-	  cp dist/ntop2ban-linux-$$arch $$d/ntop2ban; \
-	  url=$(CH_URL_AMD64); [ $$arch = arm64 ] && url=$(CH_URL_ARM64); \
-	  echo ">> 下载 $$arch 版 clickhouse"; \
-	  curl -fsSL -o $$d/clickhouse $$url || { echo "下载失败: $$url"; exit 1; }; \
+	@set -e; rm -rf dist/pkg; mkdir -p dist/pkg; \
+	for t in $(PKG_TARGETS); do \
+	  case $$t in \
+	    linux-amd64)  url="$(CH_URL_LINUX_AMD64)";; \
+	    linux-arm64)  url="$(CH_URL_LINUX_ARM64)";; \
+	    darwin-arm64) url="$(CH_URL_DARWIN_ARM64)";; \
+	    darwin-amd64) url="$(CH_URL_DARWIN_AMD64)";; \
+	    *) echo "未知打包目标 $$t"; exit 1;; \
+	  esac; \
+	  name=ntop2ban-$$t; d=dist/pkg/$$name; mkdir -p $$d; \
+	  cp dist/$$name $$d/ntop2ban; \
+	  case $$t in \
+	    darwin-*) cp packaging/README-darwin.txt $$d/README.txt;; \
+	    *)        cp packaging/README-linux.txt  $$d/README.txt;; \
+	  esac; \
+	  echo ">> 下载 $$t 版 clickhouse"; \
+	  curl -fSL --retry 3 -o $$d/clickhouse "$$url" || { echo "下载失败: $$url"; exit 1; }; \
 	  chmod +x $$d/clickhouse; \
-	  ( cd dist && mv ntop2ban-linux-$$arch.d ntop2ban-linux-$$arch-pkg \
-	    && tar czf ntop2ban-linux-$$arch.tar.gz --transform "s|^ntop2ban-linux-$$arch-pkg|ntop2ban-linux-$$arch|" ntop2ban-linux-$$arch-pkg \
-	    && rm -rf ntop2ban-linux-$$arch-pkg ); \
-	done
-	cd dist && sha256sum ntop2ban-linux-*.tar.gz >> SHA256SUMS
+	  tar --use-compress-program='gzip -1' -cf dist/$$name.tar.gz -C dist/pkg $$name; \
+	  rm -rf $$d; \
+	  echo ">> $$name.tar.gz $$(du -h dist/$$name.tar.gz | cut -f1)"; \
+	done; \
+	rmdir dist/pkg
+	cd dist && sha256sum ntop2ban-*.tar.gz >> SHA256SUMS
 	@ls -lh dist/*.tar.gz
+
+## verify-packages: 复核每个包里的 ntop2ban 与 clickhouse 是不是同一个
+## 架构、同一个操作系统。打错架构的包在开发机上看不出任何异常,只有目标机
+## 会报 exec format error,所以这一步必须在上传之前跑。
+verify-packages:
+	@set -e; for t in $(PKG_TARGETS); do \
+	  echo "== ntop2ban-$$t.tar.gz"; \
+	  rm -rf /tmp/n2b-verify && mkdir -p /tmp/n2b-verify; \
+	  tar xzf dist/ntop2ban-$$t.tar.gz -C /tmp/n2b-verify; \
+	  file /tmp/n2b-verify/ntop2ban-$$t/ntop2ban /tmp/n2b-verify/ntop2ban-$$t/clickhouse \
+	    | sed "s|/tmp/n2b-verify/ntop2ban-$$t/||"; \
+	done; rm -rf /tmp/n2b-verify
 
 clean:
 	rm -rf dist ntop2ban

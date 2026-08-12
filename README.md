@@ -39,26 +39,35 @@ tar xzf ntop2ban.tar.gz && cd ntop2ban-linux-amd64
 sudo ./ntop2ban -iface eth0 user=admin passwd=你的密码
 ```
 
-arm64 把 URL 里的 `amd64` 换成 `arm64`。包里有两个文件:
+四个平台各有一个这样的"解压即跑"包,把 URL 里的 `linux-amd64` 换掉即可:
+`linux-amd64`、`linux-arm64`、`darwin-arm64`、`darwin-amd64`。包里三个文件:
 
 ```
 ntop2ban-linux-amd64/
-├── ntop2ban      # 主程序 ~14MB
-└── clickhouse    # 官方静态二进制,由 ntop2ban 自动拉起托管
+├── ntop2ban      # 主程序 ~10MB
+├── clickhouse    # 官方静态二进制,由 ntop2ban 自动拉起托管
+└── README.txt    # 这一页的浓缩版,离线也能看
 ```
 
-压缩包约 208MB(clickhouse 那个文件本身 176MB,首次运行时自解压到 771MB)。
+压缩包 160~185MB(clickhouse 那个文件占了几乎全部;它是自解压的,首次
+运行时会把自己展开到 770MB 左右,所以目标机上要留出约 1GB 空闲磁盘)。
+`clickhouse` 必须在包里 —— ClickHouse 是唯一存储,没有兜底后端,这是
+"不装数据库"的代价。
 
-Release 里另有 `ntop2ban-darwin-arm64` / `ntop2ban-darwin-amd64` 两个裸
-二进制(不带 clickhouse):
+macOS 上是同样的流程,只多一步解除 Gatekeeper 隔离:
 
 ```bash
-# clickhouse 自己下一个 darwin 构建,ntop2ban 负责拉起与托管
-curl -L -o clickhouse https://builds.clickhouse.com/master/macos-aarch64/clickhouse
-chmod +x clickhouse && xattr -d com.apple.quarantine clickhouse   # 绕过 Gatekeeper
-xattr -d com.apple.quarantine ntop2ban-darwin-arm64
-sudo ./ntop2ban-darwin-arm64 -iface en0 -clickhouse-bin ./clickhouse user=admin passwd=你的密码
+curl -L -o ntop2ban.tar.gz https://github.com/githubflyideas/ntop2ban/releases/latest/download/ntop2ban-darwin-arm64.tar.gz
+tar xzf ntop2ban.tar.gz
+xattr -dr com.apple.quarantine ntop2ban-darwin-arm64     # 这一步必须做
+cd ntop2ban-darwin-arm64
+sudo ./ntop2ban -iface en0 -sampling 1 user=admin passwd=你的密码
 ```
+
+`xattr -dr` 不能省。浏览器下载的压缩包会被打上 `com.apple.quarantine`,
+解压出来的两个二进制都继承这个标记,包里的 `clickhouse` 既没签名也没公证,
+直接运行会被系统拦下,而报错信息指不到隔离标记这个原因上。Intel 机器把
+`darwin-arm64` 换成 `darwin-amd64`。
 
 macOS 上三种输入都能用,包括 `-input local`:本机抓包走 `/dev/bpf`,也就是
 libpcap 在 Mac 上用的那套设施 —— BPF 本来就是 BSD 的东西,Linux 的
@@ -80,11 +89,9 @@ ChmodBPF 启动项就是为这个)。不想用 `sudo` 就把设备属主改成�
 
 macOS 上唯一真正缺的是 XDP —— 内核里没有可编程快路径这种东西,`-datasource
 xdp-native` 之类在 Mac 上不存在,只有 `bpf-device` 一级。
-这是"不装数据库"的代价:ClickHouse 是唯一存储,没有兜底后端,所以它必须
-在包里。
 
-包里的 clickhouse 用的是官方 **amd64compat** 构建(纯 SSE2),不是默认的
-amd64 构建。后者要求 x86-64-v2(SSE4.2/POPCNT),在较老的物理机和屏蔽了
+`linux-amd64` 包里的 clickhouse 用的是官方 **amd64compat** 构建(纯 SSE2),
+不是默认的 amd64 构建。后者要求 x86-64-v2(SSE4.2/POPCNT),在较老的物理机和屏蔽了
 这些指令的虚拟机上一执行就 `Illegal instruction (core dumped)` —— 而那个
 错误完全指不到"换个 clickhouse 构建"这个方向。牺牲一点性能换普遍可运行,
 对单机部署是正确的取舍。
@@ -338,7 +345,9 @@ Query AST 示例:
 ```bash
 make build       # 构建 ./ntop2ban
 make check       # vet + 全部测试
-make release     # 交叉编译 linux/{amd64,arm64} 到 dist/
+make release     # 交叉编译 {linux,darwin}/{amd64,arm64} 到 dist/
+make package     # 上面四个再各配一个 clickhouse 打成 tar.gz(要联网下 ~660MB)
+make verify-packages  # 用 file(1) 复核包里两个二进制的架构对得上
 ```
 
 **最终用户不需要 clang。** 编译好的 eBPF 目标文件已提交进版本库。
