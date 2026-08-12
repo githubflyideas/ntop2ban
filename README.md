@@ -194,14 +194,17 @@ ISO 码。混进 country 会让 Top Country 里同时出现 `CN` 和 `福建省�
 | **Hosts** | Top 源/目的主机,点 IP 下钻到该主机的对端、端口、应用、国家、ASN、协议 |
 | **Conversations** | 源 ↔ 目的 的流量对,两端都可点击下钻 |
 | **ASN / Country** | 源/目的国家、ASN、组织、城市(需 GeoLite2) |
-| **Explorer** | 查询构造器:选字段、运算符、值,提交 AST;可查看生成的 SQL |
+| **Geo Map** | 世界地图按国家着色(源/目的 × 流量/包/流),点国家下钻 |
+| **Explorer** | 查询构造器:选字段、运算符、值,提交 AST;可查看生成的 SQL;查询条件可保存复用 |
 
 所有数据都走 `POST /api/v1/query` 提交 Query AST,每个卡片、每次下钻
 都是一次 AST 请求 —— 同一个引擎服务所有视图。
 
-图表是手写 SVG,不引 ECharts:1MB 的 JS 嵌进单一二进制会让体积翻倍,
-而堆叠面积、横向条形、甜甜圈用 SVG 各几十行就够;更重要的是内网部署时
-CDN 拉不到会直接白屏。
+图表用 ECharts,**资源 `go:embed` 进二进制,不引 CDN**。内网机房拉不到
+CDN 会直接白屏,而这种故障从二进制本身完全看不出原因,所以宁可让二进制
+多 1MB。世界地图底图同样入库(Natural Earth 50m,feature 名就是 ISO
+alpha-2 码,与 `src_country` 精确对应,不做国名模糊匹配),由 `/static/`
+服务:入库的是预压缩资源,浏览器接受 gzip 就原样吐字节,ETag 命中走 304。
 
 Explorer 是查询构造器:选字段、选运算符、填值,提交 AST。可以点「查看
 SQL」看后端究竟生成了什么 —— 组合出复杂查询而结果不对时,没有这个入口
@@ -271,6 +274,9 @@ query benchmark 决定,而不是凭经验。
 | `POST /api/v1/query/explain` | 返回将要执行的 SQL,不真正执行 |
 | `GET /api/v1/query/fields` | 可用字段、运算符、指标(界面据此构造查询器) |
 | `GET /api/v1/overview` | 存储状态、输入源、富化库状态 |
+| `GET /api/v1/queries` | 已保存的查询列表 |
+| `POST /api/v1/queries/save` | 保存一条查询(存界面选择,不是 SQL/AST) |
+| `POST /api/v1/queries/delete` | 删除一条已保存的查询 |
 | `POST /api/v1/enrich/mmdb` | 上传 GeoLite2-City,立即生效 |
 
 Query AST 示例:
@@ -323,15 +329,14 @@ make bpf-verify  # 重新编译并与库里的 .o 比对(CI 跑这个)
 - [x] sFlow v5 / NetFlow v5 Collector 与 Normalizer
 - [x] 写入时富化(ip2asn / DB-IP / RIR / 纯真 一键在线同步,IANA 服务名分类)
 - [x] Query AST 与查询引擎(字段白名单、强制时间范围与 limit)
-- [x] Dashboard / Hosts / Conversations / ASN-Country / Explorer
+- [x] Dashboard / Hosts / Conversations / ASN-Country / Geo Map / Explorer
 - [x] 认证:启动参数 + 内存会话
-- [ ] Saved Query / Dashboard 自定义
+- [x] Saved Query(查询条件保存复用)
+- [ ] Dashboard 自定义(卡片增删与布局)
 - [ ] 向 xdp-ban 推送可疑事件(`POST /api/v1/security/events`)
 - [ ] Benchmark 定稿 `ORDER BY`
 
 ### 已知限制
-
-**Geo Map(地图可视化)还没做。** 经纬度已经解析并入库了,缺的是地图组件。
 
 **`ORDER BY` 是草案。** 当前 `(timestamp, src_ip, dst_ip, src_port,
 dst_port)` 对应最高频的"最近 1h/24h + 某个 IP"。设计文档明确要求最终
