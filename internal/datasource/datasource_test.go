@@ -344,6 +344,112 @@ func TestParseFrameRejectsTruncated(t *testing.T) {
 	}
 }
 
+// buildWireFrame 造一个"链路上的真实包":最大以太网帧 1514 字节,IP 头
+// 声明总长 1500,TCP 头带 flags。用它断言 snaplen 截断之后我们要的东西
+// 都还在。
+func buildWireFrame(t *testing.T, flags uint16, vlanTags int) []byte {
+	t.Helper()
+	frame := make([]byte, 1514)
+	off := 12
+	for i := 0; i < vlanTags; i++ {
+		binary.BigEndian.PutUint16(frame[off:off+2], 0x8100)
+		binary.BigEndian.PutUint16(frame[off+2:off+4], 100)
+		off += 4
+	}
+	binary.BigEndian.PutUint16(frame[off:off+2], 0x0800)
+	ip := frame[off+2:]
+	ip[0] = 0x4f // IHL=15,60 字节 IP 头,最坏情况
+	ip[9] = protoTCP
+	binary.BigEndian.PutUint16(ip[2:4], uint16(len(ip)))
+	copy(ip[12:16], net.ParseIP("203.0.113.7").To4())
+	copy(ip[16:20], net.ParseIP("198.51.100.1").To4())
+	l4 := ip[60:]
+	binary.BigEndian.PutUint16(l4[0:2], 40000)
+	binary.BigEndian.PutUint16(l4[2:4], 443)
+	binary.BigEndian.PutUint16(l4[12:14], flags)
+	// 载荷填非零,这样"把载荷当成头来读"会得到明显错误的值而不是 0。
+	for i := 20; i < len(l4); i++ {
+		l4[i] = 0x5a
+	}
+	return frame
+}
+
+// TestFilterSnapLenCoversHeadersOnly 过滤器命中时的返回值就是 snaplen,
+// 内核按这个值决定拷多少字节到用户态。
+//
+// 我们只需要包头:字节数取自 IP 头声明的 total length(不是抓到的字节数),
+// TCP flags 在 L4 的第 12~13 字节。最坏情况是一层 802.1Q 标签(解析器目前
+// 认一层)+ 带满 option 的 60 字节 IP 头,即 14 + 4 + 60 + 14 = 92 字节。
+//
+// 拷整包(0xffff)的代价不在 CPU 那点 memcpy,而在 BPF 缓冲区:512KB 除以
+// 1534 字节一条记录只装得下约 340 个包,跑满千兆时那是 4ms 的余量,读循环
+// 稍一被调度晚就溢出,而溢出的表现是统计数字凭空偏低、没有任何报错。
+func TestFilterSnapLenCoversHeadersOnly(t *testing.T) {
+	insts := sampleFilterInstructions(1)
+	var accepts []uint32
+	for _, in := range insts {
+		if r, ok := in.(bpf.RetConstant); ok && r.Val != 0 {
+			accepts = append(accepts, r.Val)
+		}
+	}
+	if len(accepts) != 1 {
+		t.Fatalf("过滤器应恰好有一个非零返回值(命中时的 snaplen), got %v", accepts)
+	}
+	got := accepts[0]
+
+	const worstCaseHeaders = ethHdrLen + 4 + 60 + 14 // VLAN + 满 option 的 IP 头 + TCP 头前 14 字节
+	if got < worstCaseHeaders {
+		t.Errorf("snaplen %d 装不下最坏情况的包头(%d 字节)", got, worstCaseHeaders)
+	}
+	if got >= 1514 {
+		t.Errorf("snaplen %d 等于拷整包 —— 我们只需要包头,拷整包会把 BPF 缓冲区几乎全喂给载荷", got)
+	}
+}
+
+// TestObservationSurvivesSnapLenTruncation 这是 snaplen 能降下来的前提:
+// 截断到 snaplen 之后,字节数与 TCP flags 必须与拿到整包时完全一致。
+//
+// 字节数能对得上,靠的是 flow.ParseIPv4 采用 IP 头声明的 total length 而
+// 不是实际抓到的长度 —— 若哪天有人把它改成 len(ip),流量图会在不改任何
+// 配置的情况下整体缩水到 1/10,这个测试就是拦住那次改动的。
+func TestObservationSurvivesSnapLenTruncation(t *testing.T) {
+	const synAck = 0x012
+
+	insts := sampleFilterInstructions(1)
+	var snap int
+	for _, in := range insts {
+		if r, ok := in.(bpf.RetConstant); ok && r.Val != 0 {
+			snap = int(r.Val)
+		}
+	}
+
+	for _, vlanTags := range []int{0, 1} {
+		frame := buildWireFrame(t, synAck, vlanTags)
+		if snap > len(frame) {
+			t.Fatalf("snaplen %d 比一个最大以太网帧还长,等于没有截断", snap)
+		}
+
+		want, err := toObservation(frame)
+		if err != nil {
+			t.Fatalf("vlan=%d 整包解析失败: %v", vlanTags, err)
+		}
+		if want.Length != 1500-4*vlanTags {
+			t.Fatalf("vlan=%d 整包的字节数就不对: got %d", vlanTags, want.Length)
+		}
+		if want.TCPFlags != synAck {
+			t.Fatalf("vlan=%d 整包的 flags 就不对: got %#x", vlanTags, want.TCPFlags)
+		}
+
+		got, err := toObservation(frame[:snap])
+		if err != nil {
+			t.Fatalf("vlan=%d 截断到 %d 字节后解析失败: %v", vlanTags, snap, err)
+		}
+		if got != want {
+			t.Errorf("vlan=%d 截断到 %d 字节后结果变了:\n want %+v\n got  %+v", vlanTags, snap, want, got)
+		}
+	}
+}
+
 // --- 降级顺序 ---
 
 func TestModeLabelsAreInformative(t *testing.T) {

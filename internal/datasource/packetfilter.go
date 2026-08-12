@@ -19,6 +19,24 @@ import (
 
 const ethHdrLen = 14
 
+// snapLen 是过滤器命中时告诉内核"拷这么多字节到用户态"的值,也就是
+// snaplen。我们只统计五元组、字节数与 TCP flags,全都在包头里:最坏情况是
+// 一层 802.1Q 标签(flow.ParseEthernet 目前认一层)加一个带满 option 的 60
+// 字节 IP 头,再加 TCP 头的前 14 字节(flags 在第 12~13 字节),即
+// 14 + 4 + 60 + 14 = 92 字节。128 留了余量又是个整数 —— 将来若支持 QinQ,
+// 多一层标签也还在 128 以内。
+//
+// 字节数不受截断影响:flow.ParseIPv4 取的是 IP 头里声明的 total length,
+// 不是实际抓到的长度,那才是链路上真实的包长。
+//
+// 为什么不拷整包:代价主要不在 memcpy,而在缓冲区。macOS 那侧 512KB 的 BPF
+// 缓冲区,按每条记录 20 字节头 + 1514 字节包算只装得下约 340 个包,跑满
+// 千兆(约 81k pps)时那是 4ms 的余量 —— 读循环被调度晚一点就溢出,而内核
+// 缓冲溢出的表现是统计数字凭空偏低,不报任何错。降到 128 之后一个缓冲区
+// 装得下约 3500 个包,余量变成 43ms。Linux 的 AF_PACKET 侧同样受益,只是
+// 那边还有内核抽样兜着,没这么紧。
+const snapLen = 128
+
 // IPv4 协议号。不从 x/sys/unix 取:这个文件要在所有平台上编译,而
 // 协议号是 IANA 定的常量,不是操作系统的东西。
 const (
@@ -60,7 +78,7 @@ func sampleFilterInstructions(samplingN int) []bpf.Instruction {
 
 	rejectIdx := len(insts)
 	acceptIdx := rejectIdx + 1
-	insts = append(insts, bpf.RetConstant{Val: 0}, bpf.RetConstant{Val: 0xffff})
+	insts = append(insts, bpf.RetConstant{Val: 0}, bpf.RetConstant{Val: snapLen})
 
 	// 回填跳转距离。不手算偏移——算错了不会报错,过滤器只会静默
 	// 放行或丢弃错误的包,线上表现为"统计数字不对"却无从追查。
