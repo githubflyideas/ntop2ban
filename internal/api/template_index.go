@@ -27,20 +27,20 @@ const indexHTML = `<!DOCTYPE html>
  --blue:#3d7eff; --cyan:#00c2d7; --green:#2fbf71; --amber:#e8a33d;
  --red:#e5534b; --purple:#a371f7; --pink:#db61a2}
 *{box-sizing:border-box}
-body{margin:0;font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+body{margin:0;font:15.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
  background:var(--bg);color:var(--fg)}
 a{color:var(--blue);text-decoration:none}
 
-header{display:flex;align-items:center;gap:14px;padding:0 18px;height:48px;
+header{display:flex;align-items:center;gap:14px;padding:0 18px;height:58px;
  background:var(--panel);border-bottom:1px solid var(--line)}
-header .logo{font-size:15px;font-weight:600;letter-spacing:-.02em}
+header .logo{font-size:24px;font-weight:600;letter-spacing:-.02em}
 header .logo span{color:var(--blue)}
-header .meta{margin-left:auto;display:flex;gap:16px;align-items:center;font-size:12px;color:var(--dim)}
+header .meta{margin-left:auto;display:flex;gap:16px;align-items:center;font-size:14px;color:var(--dim)}
 header .meta b{color:var(--fg);font-weight:500}
-header .out{color:var(--dim);font-size:12px}
+header .out{color:var(--dim);font-size:14px}
 
 nav{display:flex;gap:4px;padding:0 18px;background:var(--panel);border-bottom:1px solid var(--line)}
-nav button{padding:10px 14px;border:0;background:none;font-size:13px;color:var(--dim);
+nav button{padding:10px 14px;border:0;background:none;font-size:15px;color:var(--dim);
  cursor:pointer;border-bottom:2px solid transparent}
 nav button:hover{color:var(--fg)}
 nav button.on{color:var(--fg);border-bottom-color:var(--blue)}
@@ -51,37 +51,37 @@ section.on{display:block}
 
 .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
 select,input[type=text],input[type=number]{padding:6px 9px;background:var(--panel);
- border:1px solid var(--line2);border-radius:5px;font-size:12.5px;color:var(--fg)}
+ border:1px solid var(--line2);border-radius:5px;font-size:14.5px;color:var(--fg)}
 select:focus,input:focus{outline:none;border-color:var(--blue)}
 button.act{padding:6px 13px;border:0;border-radius:5px;background:var(--blue);
- color:#fff;font-size:12.5px;cursor:pointer}
+ color:#fff;font-size:14.5px;cursor:pointer}
 button.act:hover{background:#5590ff}
 button.gh{padding:6px 11px;background:var(--panel);border:1px solid var(--line2);
- border-radius:5px;color:var(--dim);font-size:12.5px;cursor:pointer}
+ border-radius:5px;color:var(--dim);font-size:14.5px;cursor:pointer}
 button.gh:hover{color:var(--fg);border-color:var(--dim2)}
 
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:13px 15px}
-.kpi .k{font-size:11.5px;color:var(--dim);margin-bottom:5px;letter-spacing:.02em}
-.kpi .v{font-size:22px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
-.kpi .n{font-size:11px;color:var(--dim2);margin-top:3px}
+.kpi .k{font-size:13.5px;color:var(--dim);margin-bottom:5px;letter-spacing:.02em}
+.kpi .v{font-size:24px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi .n{font-size:13px;color:var(--dim2);margin-top:3px}
 
 .grid{display:grid;gap:12px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:14px}
-.panel h2{margin:0 0 2px;font-size:13px;font-weight:600}
-.panel .hint{margin:0 0 11px;font-size:11.5px;color:var(--dim2)}
+.panel h2{margin:0 0 2px;font-size:15px;font-weight:600}
+.panel .hint{margin:0 0 11px;font-size:13.5px;color:var(--dim2)}
 .panel.wide{grid-column:1/-1}
 
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;padding:6px 8px;color:var(--dim);font-weight:500;font-size:11.5px;
+table{width:100%;border-collapse:collapse;font-size:14.5px}
+th{text-align:left;padding:6px 8px;color:var(--dim);font-weight:500;font-size:13.5px;
  border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:6px 8px;border-bottom:1px solid rgba(35,44,59,.55)}
 tr:last-child td{border-bottom:0}
 tbody tr:hover td{background:rgba(61,126,255,.06)}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .drill{color:var(--blue);cursor:pointer}
 .drill:hover{text-decoration:underline}
@@ -104,33 +104,33 @@ tbody tr:hover td{background:rgba(61,126,255,.06)}
 .pills{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:12px;
  background:rgba(61,126,255,.16);border:1px solid rgba(61,126,255,.35);
- font-size:11.5px;color:#9fc0ff}
+ font-size:13.5px;color:#9fc0ff}
 .pill b{font-weight:600;color:#cfe0ff}
 .pill x{cursor:pointer;color:#8ab4ff;font-style:normal;line-height:1}
 .pill x:hover{color:#fff}
 
-.empty{padding:26px;text-align:center;color:var(--dim2);font-size:12.5px}
+.empty{padding:26px;text-align:center;color:var(--dim2);font-size:14.5px}
 .err{padding:10px 12px;border-radius:6px;background:#2d1618;color:#ff9c9c;
- font-size:12.5px;margin-bottom:12px;display:none}
+ font-size:14.5px;margin-bottom:12px;display:none}
 svg{display:block;width:100%;height:auto}
-.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:11.5px;color:var(--dim)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:13.5px;color:var(--dim)}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
 
 .cond{display:flex;gap:7px;align-items:center;margin-bottom:7px}
-.cond select,.cond input{font-size:12px}
+.cond select,.cond input{font-size:14px}
 pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
- border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;
+ border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;
  overflow-x:auto;white-space:pre-wrap;color:var(--dim)}
 .ok{color:var(--green)}
 .warn{color:var(--amber)}
 .src{border:1px solid var(--line);border-radius:7px;padding:11px 13px;margin-bottom:8px}
 .src .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-.src .nm{font-weight:600;font-size:12.5px}
-.src .lic{font-size:11px;color:var(--dim2)}
-.src .fl{font-size:11.5px;color:var(--cyan);margin-top:4px}
-.src .nt{font-size:11.5px;color:var(--dim);margin-top:3px}
+.src .nm{font-weight:600;font-size:14.5px}
+.src .lic{font-size:13px;color:var(--dim2)}
+.src .fl{font-size:13.5px;color:var(--cyan);margin-top:4px}
+.src .nt{font-size:13.5px;color:var(--dim);margin-top:3px}
 .src button{margin-left:auto}
-.tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;
+.tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:13px;
  background:rgba(61,126,255,.14);color:#8ab4ff}
 .up{border:1px dashed var(--line2);border-radius:8px;padding:16px;text-align:center;color:var(--dim)}
 </style>
@@ -173,7 +173,7 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
       <option value="flows">按流数</option>
     </select>
     <button class="act" id="refresh">刷新</button>
-    <span class="hint" id="scope" style="color:var(--dim2);font-size:11.5px"></span>
+    <span class="hint" id="scope" style="color:var(--dim2);font-size:13.5px"></span>
   </div>
 
   <div class="bar pills" id="pills" style="display:none"></div>
@@ -184,7 +184,7 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
       <div class="panel wide">
         <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
           <h2>流量趋势</h2>
-          <select id="ts-dim" style="margin-left:auto;font-size:12px">
+          <select id="ts-dim" style="margin-left:auto;font-size:14px">
             <option value="application" selected>按应用堆叠</option>
             <option value="protocol">按协议堆叠</option>
             <option value="src_country">按源国家堆叠</option>
@@ -221,7 +221,7 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
     <div class="panel wide" style="margin-bottom:12px">
       <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
         <h2>流量地图</h2>
-        <select id="map-dir" style="margin-left:auto;font-size:12px">
+        <select id="map-dir" style="margin-left:auto;font-size:14px">
           <option value="src_country" selected>按源国家</option>
           <option value="dst_country">按目的国家</option>
         </select>
@@ -249,11 +249,11 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
         <select id="e-logic"><option value="AND">全部满足 (AND)</option><option value="OR">任一满足 (OR)</option></select>
       </div>
       <div class="bar">
-        <label style="color:var(--dim);font-size:12px">分组</label>
+        <label style="color:var(--dim);font-size:14px">分组</label>
         <select id="e-group"></select>
-        <label style="color:var(--dim);font-size:12px">指标</label>
+        <label style="color:var(--dim);font-size:14px">指标</label>
         <select id="e-metric"></select>
-        <label style="color:var(--dim);font-size:12px">条数</label>
+        <label style="color:var(--dim);font-size:14px">条数</label>
         <input type="number" id="e-limit" value="100" style="width:78px">
         <button class="act" id="e-run">查询</button>
         <button class="gh" id="e-explain">查看 SQL</button>
@@ -514,14 +514,14 @@ function showEmpty(el, msg){
 }
 
 const TIP = {backgroundColor:'#161d29', borderColor:'#2b3546', borderWidth:1,
-  textStyle:{color:'#e6edf3',fontSize:12}, extraCssText:'box-shadow:0 4px 16px rgba(0,0,0,.45)'};
+  textStyle:{color:'#e6edf3',fontSize:14}, extraCssText:'box-shadow:0 4px 16px rgba(0,0,0,.45)'};
 
 function tsTooltip(ps){
   if(!ps || !ps.length) return '';
   let total=0;
   for(const p of ps) total += Number(p.value[1])||0;
   const items = ps.slice().sort((a,b)=>(Number(b.value[1])||0)-(Number(a.value[1])||0));
-  let h='<div style="font-size:11.5px;color:#8b95a3;margin-bottom:5px">'+ts(ps[0].value[0]/1000)+'</div>';
+  let h='<div style="font-size:13.5px;color:#8b95a3;margin-bottom:5px">'+ts(ps[0].value[0]/1000)+'</div>';
   for(const p of items){
     const v=Number(p.value[1])||0;
     if(!v) continue;   // 补零点占满了图例时的 tooltip,没有信息量
@@ -579,18 +579,18 @@ async function timeseries(el){
     color: PAL,
     tooltip: Object.assign({trigger:'axis', formatter:tsTooltip,
       axisPointer:{type:'line', lineStyle:{color:'#3d7eff', width:1, type:'dashed'}}}, TIP),
-    legend: stacked ? {top:0, right:8, textStyle:{color:'#8b95a3',fontSize:11},
+    legend: stacked ? {top:0, right:8, textStyle:{color:'#8b95a3',fontSize:13},
       itemWidth:9, itemHeight:9, itemGap:14, inactiveColor:'#454f60'} : {show:false},
     grid:{left:66, right:18, top: stacked?30:12, bottom:58},
     xAxis:{type:'time', boundaryGap:false,
       axisLine:{lineStyle:{color:'#2b3546'}}, axisTick:{show:false},
-      axisLabel:{color:'#8b95a3', fontSize:10.5,
+      axisLabel:{color:'#8b95a3', fontSize:13,
         formatter:{year:'{yyyy}',month:'{MM}-{dd}',day:'{MM}-{dd}',
           hour:'{MM}-{dd}\n{HH}:{mm}',minute:'{HH}:{mm}',second:'{HH}:{mm}:{ss}'}},
       splitLine:{show:false}},
     yAxis:{type:'value',
       axisLine:{show:false}, axisTick:{show:false},
-      axisLabel:{color:'#8b95a3', fontSize:10.5, formatter:v=>fmtMetric(v)},
+      axisLabel:{color:'#8b95a3', fontSize:13, formatter:v=>fmtMetric(v)},
       splitLine:{lineStyle:{color:'#232c3b'}}},
     // 局部放大:采样数据里最值得看的往往是某一分钟的尖峰,而整段视图
     // 里它只有一两个像素宽。
@@ -599,7 +599,7 @@ async function timeseries(el){
        backgroundColor:'rgba(0,0,0,0)', fillerColor:'rgba(61,126,255,.14)',
        dataBackground:{lineStyle:{color:'#2b3546'}, areaStyle:{color:'#1b2230'}},
        handleStyle:{color:'#3d7eff', borderColor:'#3d7eff'},
-       textStyle:{color:'#5f6977', fontSize:10}}],
+       textStyle:{color:'#5f6977', fontSize:13}}],
     series: series.map(sr=>({name:sr.name, type:'line',
       stack: stacked?'总量':undefined,
       showSymbol:false, symbol:'circle', symbolSize:5,
@@ -653,10 +653,10 @@ async function donut(el, groupBy, opts){
     tooltip: Object.assign({trigger:'item',
       formatter:p=>esc(p.name)+'<br><b>'+fmtMetric(p.value)+'</b> · '+p.percent+'%'}, TIP),
     legend:{type:'scroll', orient:'vertical', right:4, top:6, bottom:6,
-      textStyle:{color:'#8b95a3', fontSize:11}, itemWidth:9, itemHeight:9},
+      textStyle:{color:'#8b95a3', fontSize:13}, itemWidth:9, itemHeight:9},
     title:{text:fmtMetric(total), subtext:'合计', left:'27%', top:'40%',
-      textAlign:'center', textStyle:{color:'#e6edf3',fontSize:15,fontWeight:600},
-      subtextStyle:{color:'#8b95a3',fontSize:11}},
+      textAlign:'center', textStyle:{color:'#e6edf3',fontSize:17,fontWeight:600},
+      subtextStyle:{color:'#8b95a3',fontSize:13}},
     series:[{type:'pie', radius:['54%','80%'], center:['27%','52%'],
       avoidLabelOverlap:true, label:{show:false}, labelLine:{show:false},
       itemStyle:{borderColor:'#161d29', borderWidth:1.5},
@@ -720,7 +720,7 @@ async function geoMap(el){
         const n = zh[p.name]||p.name;
         if(p.data===undefined || p.data===null) return esc(n)+'<br><span style="color:#8b95a3">这段时间没有流量</span>';
         return '<b>'+esc(n)+'</b> ('+esc(p.name)+')<br>'+fmtMetric(p.data.raw)
-             + '<br><span style="color:#8b95a3;font-size:11px">点击加成过滤条件</span>';
+             + '<br><span style="color:#8b95a3;font-size:13px">点击加成过滤条件</span>';
       }}, TIP),
     // 色标要显示出来。不显示的话,一屏橙色只能看出"这几个国家有流量",
     // 看不出彼此差几个数量级 —— 而这正是用对数刻度的目的。两端的文字
@@ -732,7 +732,7 @@ async function geoMap(el){
     visualMap:{show:true, left:14, bottom:16, itemHeight:90,
       min:Math.log10(min+1) - (min===max?1:0), max:Math.log10(max+1),
       text:[fmtMetric(max), fmtMetric(min)],
-      textStyle:{color:'#8b95a3', fontSize:11},
+      textStyle:{color:'#8b95a3', fontSize:13},
       inRange:{color:['#1b2a44','#22508f','#3d7eff','#00c2d7','#e8a33d']}},
     series:[{type:'map', map:'world', roam:true, zoom:1.15,
       center:[10,20],
@@ -846,12 +846,12 @@ async function drillTo(field, value){
   box.innerHTML = '<h2>'+esc(value)+' <span class="tag">'+esc(field)+'</span></h2>'
     + '<p class="hint">该主机的构成。点上面的其他 IP 可切换。</p>'
     + '<div class="grid g3">'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">Top 对端</h2><div id="d-peer"></div></div>'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">Top 端口</h2><div id="d-port"></div></div>'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">应用</h2><div id="d-app"></div></div>'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">对端国家</h2><div id="d-country"></div></div>'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">对端 ASN</h2><div id="d-asn"></div></div>'
-    + '<div><h2 style="font-size:12px;color:var(--dim)">协议</h2><div id="d-proto"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">Top 对端</h2><div id="d-peer"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">Top 端口</h2><div id="d-port"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">应用</h2><div id="d-app"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">对端国家</h2><div id="d-country"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">对端 ASN</h2><div id="d-asn"></div></div>'
+    + '<div><h2 style="font-size:14px;color:var(--dim)">协议</h2><div id="d-proto"></div></div>'
     + '</div>';
 
   const f = {field:field, operator:'eq', value:value};
