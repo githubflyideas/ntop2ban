@@ -32,6 +32,9 @@ type Server struct {
 	syncer *enrich.Syncer
 	log    *log.Logger
 
+	// queries 是保存查询的持久化(DataDir/queries.json)。
+	queries *queryStore
+
 	// DataDir 用于存放上传的 mmdb。
 	DataDir string
 
@@ -61,6 +64,7 @@ func New(cfg Config) *Server {
 		st: cfg.Store, au: cfg.Auth, asn: cfg.ASN, mmdb: cfg.MMDB,
 		city: cfg.City, syncer: cfg.Syncer,
 		log: lg, DataDir: cfg.DataDir, Inputs: cfg.Inputs,
+		queries: newQueryStore(cfg.DataDir),
 	}
 }
 
@@ -75,6 +79,11 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/query", s.authed(s.handleQuery))
 	mux.HandleFunc("/api/v1/query/explain", s.authed(s.handleExplain))
 	mux.HandleFunc("/api/v1/query/fields", s.authed(s.handleFields))
+
+	// 保存查询。存的是界面上的选择而不是编译好的 AST,理由见 savedquery.go。
+	mux.HandleFunc("/api/v1/queries", s.authed(s.handleQueriesList))
+	mux.HandleFunc("/api/v1/queries/save", s.authed(s.handleQuerySave))
+	mux.HandleFunc("/api/v1/queries/delete", s.authed(s.handleQueryDelete))
 
 	mux.HandleFunc("/api/v1/overview", s.authed(s.handleOverview))
 	mux.HandleFunc("/api/v1/enrich/mmdb", s.authed(s.handleMMDBUpload))
