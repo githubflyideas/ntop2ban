@@ -33,8 +33,6 @@ const (
 	KindASN SourceKind = "asn"
 	// KindCity 填 country(ISO)/ region / city / 经纬度。
 	KindCity SourceKind = "city"
-	// KindCityText 只填 region / city 的自由文本,**不填 country**。
-	KindCityText SourceKind = "city_text"
 )
 
 // Source 是一个可同步的上游。
@@ -89,20 +87,6 @@ var Sources = []Source{
 		Note:        "唯一免费且无需注册的城市库 —— 装上它 Top City 与地图才可用",
 		url:         dbipURL("dbip-city-lite", "csv.gz"),
 		fallbackURL: dbipURLPrevMonth("dbip-city-lite", "csv.gz"),
-	},
-	{
-		ID: "apnic", Name: "APNIC 分配记录(亚太)",
-		Kind: KindASN, License: "APNIC 开放数据",
-		Fields: "国家(ISO)",
-		Note:   "权威**注册**数据,不是路由归属;不含 ASN 与组织名",
-		url:    func(time.Time) string { return "https://ftp.apnic.net/stats/apnic/delegated-apnic-extended-latest" },
-	},
-	{
-		ID: "qqwry", Name: "纯真 IP 库(qqwry,文本导出)",
-		Kind: KindCityText, License: "个人非商业免费",
-		Fields: "省/市(中文)",
-		Note:   "国内 IP 的城市与运营商粒度最好;**不填国家** —— 它输出中文自由文本而非 ISO 码,混进 country 会让 Top Country 口径不稳",
-		url:    func(time.Time) string { return "https://raw.githubusercontent.com/metowolf/qqwry.dat/master/qqwry.txt" },
 	},
 }
 
@@ -213,9 +197,6 @@ func (s *Syncer) Sync(ctx context.Context, id string) error {
 }
 
 func datExt(src Source) string {
-	if src.Kind == KindCityText {
-		return ".txt"
-	}
 	if strings.HasSuffix(src.URL(), ".gz") {
 		return ".gz"
 	}
@@ -306,10 +287,6 @@ func (s *Syncer) loadInto(src Source, path string) (int, error) {
 			if err := s.loadDBIPASN(r); err != nil {
 				return 0, err
 			}
-		} else if src.ID == "apnic" {
-			if err := s.loadRIRDelegated(r); err != nil {
-				return 0, err
-			}
 		} else {
 			if err := s.asn.Load(r); err != nil {
 				return 0, err
@@ -319,12 +296,6 @@ func (s *Syncer) loadInto(src Source, path string) (int, error) {
 
 	case KindCity:
 		if err := s.city.LoadDBIPCity(r); err != nil {
-			return 0, err
-		}
-		return s.city.Size(), nil
-
-	case KindCityText:
-		if err := s.city.LoadQQWryText(r); err != nil {
 			return 0, err
 		}
 		return s.city.Size(), nil
@@ -368,47 +339,6 @@ func (s *Syncer) loadDBIPASN(r io.Reader) error {
 	}
 	if len(entries) == 0 {
 		return fmt.Errorf("enrich: db-ip ASN 数据为空或格式不符(期望 4 列 CSV)")
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].start < entries[j].start })
-	s.asn.replace(entries)
-	return nil
-}
-
-// loadRIRDelegated 解析 RIR delegated-extended 格式。
-//
-// 只取 ipv4 行,拿国家码。这类源是**注册**归属而不是路由归属,
-// 两者对同一个 IP 可能给出不同国家 —— 界面上标注了口径,让用户知道
-// 自己在看哪一种。
-func (s *Syncer) loadRIRDelegated(r io.Reader) error {
-	sc := newLineScanner(r)
-	entries := make([]entry, 0, 1<<17)
-	intern := make(map[string]string, 512)
-
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		// registry|cc|type|start|value|date|status|...
-		f := strings.Split(line, "|")
-		if len(f) < 7 || f[2] != "ipv4" || f[1] == "" {
-			continue
-		}
-		start, ok := parseIPv4ToUint32(f[3])
-		if !ok {
-			continue
-		}
-		count, err := strconv.ParseUint(f[4], 10, 32)
-		if err != nil || count == 0 {
-			continue
-		}
-		entries = append(entries, entry{
-			start: start, end: start + uint32(count) - 1,
-			country: internString(intern, strings.ToUpper(f[1])),
-		})
-	}
-	if len(entries) == 0 {
-		return fmt.Errorf("enrich: RIR 数据为空或格式不符(期望 | 分隔的 delegated-extended)")
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].start < entries[j].start })
 	s.asn.replace(entries)

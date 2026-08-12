@@ -7,7 +7,6 @@ import (
 	"io"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -138,75 +137,6 @@ func (d *CityDB) LoadDBIPCity(r io.Reader) error {
 
 	d.mu.Lock()
 	d.entries, d.loaded, d.source = entries, true, "db-ip city-lite"
-	d.mu.Unlock()
-	return nil
-}
-
-// LoadQQWryText 解析纯真(qqwry)导出的文本形态。
-//
-// 纯真原始的 qqwry.dat 是自定义二进制格式且是 GBK 编码,解析它需要一套
-// 专门的索引寻址逻辑。这里接受的是它常见的文本导出形态:
-//
-//	start_ip end_ip 地区 运营商
-//	1.0.1.0 1.0.3.255 福建省福州市 电信
-//
-// **纯真不填 country。** 它的输出是自由文本中文串("福建省福州市"),
-// 不是 ISO 国家码。country 那一列的口径必须稳定,否则同一批流量的
-// Top Country 会因为"装了哪个库"而变化,而那种差异没人能解释。
-// 所以纯真只填 region/city/isp 当文本用 —— 国内 IP 的城市与运营商
-// 粒度它确实比 db-ip 好,这是它的价值所在。
-func (d *CityDB) LoadQQWryText(r io.Reader) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 256*1024), 1<<20)
-
-	entries := make([]cityEntry, 0, 1<<19)
-	intern := make(map[string]string, 1<<16)
-
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		start, ok1 := parseIPv4ToUint32(fields[0])
-		end, ok2 := parseIPv4ToUint32(fields[1])
-		if !ok1 || !ok2 {
-			continue
-		}
-
-		region := fields[2]
-		city := ""
-		// "福建省福州市" 这种连写的形态里,省与市粘在一起。拆开让
-		// region/city 两个维度都能分组 —— 否则 Top Region 与 Top City
-		// 会显示成完全一样的东西。
-		if i := strings.Index(region, "省"); i > 0 && i+3 <= len(region) {
-			city = region[i+3:]
-			region = region[:i+3]
-		} else if i := strings.Index(region, "市"); i > 0 {
-			city = region[:i+3]
-		}
-
-		entries = append(entries, cityEntry{
-			start:  start,
-			end:    end,
-			region: internString(intern, region),
-			city:   internString(intern, city),
-		})
-	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("enrich: 读取纯真数据: %w", err)
-	}
-	if len(entries) == 0 {
-		return fmt.Errorf("enrich: 纯真数据为空或格式不符(期望 `起始IP 结束IP 地区 运营商`)")
-	}
-
-	sort.Slice(entries, func(i, j int) bool { return entries[i].start < entries[j].start })
-
-	d.mu.Lock()
-	d.entries, d.loaded, d.source = entries, true, "纯真 qqwry"
 	d.mu.Unlock()
 	return nil
 }

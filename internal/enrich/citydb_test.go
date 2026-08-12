@@ -87,53 +87,6 @@ func TestLoadDBIPCityRejectsWrongFormat(t *testing.T) {
 	}
 }
 
-// 纯真文本导出格式。
-const sampleQQWry = `1.0.1.0 1.0.3.255 福建省福州市 电信
-1.0.8.0 1.0.15.255 广东省广州市 电信
-14.0.0.0 14.0.15.255 北京市 联通
-`
-
-// TestLoadQQWryTextDoesNotFillCountry 这是最重要的一条断言。
-//
-// 纯真输出的是中文自由文本("福建省福州市"),不是 ISO 国家码。
-// 混进 country 会让同一批流量的 Top Country 里同时出现 "CN" 和
-// "福建省福州市" 两种东西,口径彻底乱掉,而且没人能从现象反推原因。
-func TestLoadQQWryTextDoesNotFillCountry(t *testing.T) {
-	db := NewCityDB()
-	if err := db.LoadQQWryText(strings.NewReader(sampleQQWry)); err != nil {
-		t.Fatalf("LoadQQWryText: %v", err)
-	}
-	got := db.Lookup(mustIPv4(t, "1.0.1.5"))
-	if got.Country != "" {
-		t.Errorf("纯真不该填 country(它给的是中文文本不是 ISO 码), got %q", got.Country)
-	}
-	if got.Region == "" {
-		t.Error("region 应被填上")
-	}
-}
-
-// TestLoadQQWryTextSplitsProvinceAndCity "福建省福州市" 里省市粘在一起。
-// 不拆的话 Top Region 与 Top City 会显示成完全一样的东西。
-func TestLoadQQWryTextSplitsProvinceAndCity(t *testing.T) {
-	db := NewCityDB()
-	if err := db.LoadQQWryText(strings.NewReader(sampleQQWry)); err != nil {
-		t.Fatalf("LoadQQWryText: %v", err)
-	}
-	got := db.Lookup(mustIPv4(t, "1.0.1.5"))
-	if got.Region != "福建省" {
-		t.Errorf("region: want 福建省, got %q", got.Region)
-	}
-	if got.City != "福州市" {
-		t.Errorf("city: want 福州市, got %q", got.City)
-	}
-
-	// 直辖市没有"省",region 与 city 的处理不该出错
-	bj := db.Lookup(mustIPv4(t, "14.0.0.5"))
-	if bj.Region == "" && bj.City == "" {
-		t.Error("直辖市至少应填上一个维度")
-	}
-}
-
 func TestCityDBSourceIsLabelled(t *testing.T) {
 	db := NewCityDB()
 	_ = db.LoadDBIPCity(strings.NewReader(sampleDBIPCity))
@@ -141,11 +94,6 @@ func TestCityDBSourceIsLabelled(t *testing.T) {
 		t.Errorf("应标注数据来源, got %q", db.Source())
 	}
 
-	db2 := NewCityDB()
-	_ = db2.LoadQQWryText(strings.NewReader(sampleQQWry))
-	if db2.Source() != "纯真 qqwry" {
-		t.Errorf("应标注数据来源, got %q", db2.Source())
-	}
 }
 
 func TestUnloadedCityDBIsNoOp(t *testing.T) {
@@ -164,7 +112,7 @@ func TestUnloadedCityDBIsNoOp(t *testing.T) {
 // 与许可。用户最常问的就是"我装了库为什么某一列还是空的",这两项是
 // 界面上回答那个问题的依据。
 func TestSourcesAllDeclareFieldsAndLicense(t *testing.T) {
-	if len(Sources) < 4 {
+	if len(Sources) < 3 {
 		t.Fatalf("内置源太少: %d", len(Sources))
 	}
 	seen := map[string]bool{}
@@ -222,18 +170,18 @@ func TestDBIPHasPreviousMonthFallback(t *testing.T) {
 	}
 }
 
-// TestQQWrySourceIsCityTextKind 纯真必须是 city_text 类型 —— 那个类型
-// 决定了它不会去填 country。分类错了会让国家维度被中文文本污染。
-func TestQQWrySourceIsCityTextKind(t *testing.T) {
-	src, ok := SourceByID("qqwry")
-	if !ok {
-		t.Fatal("找不到 qqwry")
-	}
-	if src.Kind != KindCityText {
-		t.Errorf("纯真应为 KindCityText, got %q", src.Kind)
-	}
-	if !strings.Contains(src.Note, "不填国家") {
-		t.Error("Note 应明确说明它不填国家,否则用户会困惑于国家维度为空")
+// TestNoDeadSourcesListed 列表里不许出现同步不了的源。
+//
+// APNIC 与纯真曾经在列表里,但都同步不了:APNIC 的 ftp.apnic.net 在很多
+// 家宽出口上直接超时,而纯真那个文本导出的仓库早就不更新了、URL 也时好
+// 时坏。界面上摆一个点了必然失败的按钮,比不摆更糟 —— 用户会以为是自己
+// 的网络或程序有问题。所以这条测试钉住"删掉了就别再加回来",要加回来
+// 得先真的能下下来。
+func TestNoDeadSourcesListed(t *testing.T) {
+	for _, id := range []string{"apnic", "qqwry"} {
+		if _, ok := SourceByID(id); ok {
+			t.Errorf("%s 同步不了,不该出现在源列表里", id)
+		}
 	}
 }
 

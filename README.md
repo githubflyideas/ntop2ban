@@ -198,8 +198,11 @@ Observe/Analyze,所以它不需要跟任何封禁程序争抢网卡挂载点。
 | iptoasn.com ip2asn | ASN | ASN、国家(ISO)、组织 | 公共领域 |
 | DB-IP ASN Lite | ASN | ASN、组织(公司全称更规整) | CC BY 4.0 |
 | **DB-IP City Lite** | 城市 | 国家、省/州、城市、经纬度 | CC BY 4.0 |
-| APNIC 分配记录 | ASN | 国家(ISO) | APNIC 开放数据 |
-| 纯真 IP 库(qqwry) | 城市(中文) | 省/市中文名 | 个人非商业免费 |
+
+列表里只留能真正下下来的源。APNIC 的分配记录与纯真的文本导出都曾在列表
+里,现在删掉了:`ftp.apnic.net` 在不少家宽出口上直接超时,而纯真那个文本
+导出的仓库早已不再更新、URL 也时好时坏。摆一个点了必然失败的按钮比不摆
+更糟 —— 用户会先怀疑自己的网络或这个程序。
 
 也可以用 `-ip2asn ./ip2asn-v4.tsv.gz` 指定本地文件。同步过的库存在数据
 目录里,重启后自动加载,不用每次重新点。
@@ -214,17 +217,12 @@ MaxMind GeoLite2 精度更高但需要 license key,所以只能手动下载后�
 - `asn` / `org` 来自 ASN 类源
 - `country` / `region` / `city` / 经纬度**同时**来自城市类源 —— 城市库带
   ISO 码时它的 country 覆盖 ASN 库给的那个
-- 纯真只填中文 `region` / `city`,**不填 country**
 
-最后两条各有理由。城市库覆盖 country 是实测逼出来的:`114.114.114.114`
+城市库覆盖 country 是实测逼出来的:`114.114.114.114`
 在 ip2asn 里归 US(按 BGP 路由归属,该前缀确实被一个美国 AS 宣告),而
 db-ip 定位到山东济南 —— 保留 ASN 库的 country 会产出
 `country=US / city=济南` 这种自相矛盾的行,而矛盾就在同一行里,用户第一眼
 就会看到且无法解释。让 country/region/city 三者来自同一个源才自洽。
-
-纯真不填 country 是因为它输出的是中文自由文本("福建省福州市")而不是
-ISO 码。混进 country 会让 Top Country 里同时出现 `CN` 和 `福建省福州市`
-两种东西,口径彻底乱掉。
 
 ## 界面
 
@@ -371,7 +369,7 @@ make bpf-verify  # 重新编译并与库里的 .o 比对(CI 跑这个)
 - [x] ClickHouse 存储层(flows / flows_1m / ip_metadata,托管子进程)
 - [x] 本机采集:XDP 优先,三级降级
 - [x] sFlow v5 / NetFlow v5 Collector 与 Normalizer
-- [x] 写入时富化(ip2asn / DB-IP / RIR / 纯真 一键在线同步,IANA 服务名分类)
+- [x] 写入时富化(ip2asn / DB-IP 一键在线同步,IANA 服务名分类)
 - [x] Query AST 与查询引擎(字段白名单、强制时间范围与 limit)
 - [x] Dashboard / Hosts / Conversations / ASN-Country / Geo Map / Explorer
 - [x] 认证:启动参数 + 内存会话

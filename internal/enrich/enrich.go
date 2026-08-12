@@ -49,7 +49,7 @@ func (e *Enricher) Apply(batch []flow.Flow) {
 		}
 
 		// 城市维度。两个来源:mmdb(MaxMind,精度最高)与 CityDB
-		// (db-ip CSV 或纯真文本,可在线同步)。mmdb 优先。
+		// (db-ip 的 CSV,可在线同步)。mmdb 优先。
 		//
 		// 都没加载时这些字段保持为空,界面上对应视图不显示 ——
 		// 而不是编一个值出来。

@@ -98,7 +98,7 @@ func main() {
 		}
 	} else if !asnDB.Loaded() {
 		log.Println("富化:ASN/国家维度不可用 —— 在界面「设置」页点一下同步即可" +
-			"(内置 iptoasn / DB-IP / RIR 等源,无需注册)")
+			"(内置 iptoasn 与 DB-IP 两个源,无需注册)")
 	}
 
 	cityDB := enrich.NewCityDB()

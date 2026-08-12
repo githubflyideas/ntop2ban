@@ -1104,7 +1104,7 @@ async function loadSources(){
 
   let h='';
   for(const s of d.sources){
-    const kindLabel = {asn:'ASN 类', city:'城市类', city_text:'城市类(中文文本)'}[s.kind]||s.kind;
+    const kindLabel = {asn:'ASN 类', city:'城市类'}[s.kind]||s.kind;
     h += '<div class="src"><div class="top">'
       + '<span class="nm">'+esc(s.name)+'</span>'
       + '<span class="tag">'+esc(kindLabel)+'</span>'
