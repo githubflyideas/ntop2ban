@@ -75,6 +75,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("/", s.authed(s.handleIndex))
 
+	// 嵌入的前端资源(ECharts、世界地图)。不走 authed,原因见 handleStatic。
+	mux.HandleFunc("/static/", s.handleStatic)
+
 	// 查询:唯一的数据入口。Dashboard 与 Explorer 都走它。
 	mux.HandleFunc("/api/v1/query", s.authed(s.handleQuery))
 	mux.HandleFunc("/api/v1/query/explain", s.authed(s.handleExplain))
