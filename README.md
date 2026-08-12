@@ -101,15 +101,17 @@ xdp-native` 之类在 Mac 上不存在,只有 `bpf-device` 一级。
 错误完全指不到"换个 clickhouse 构建"这个方向。牺牲一点性能换普遍可运行,
 对单机部署是正确的取舍。
 
-不想下这么大的话,单独下主程序(9MB)接外部 ClickHouse:
+**每个 release 里只有这四个包加一个 `SHA256SUMS`,没有别的。** 早先还
+同时发四个裸二进制,结果一个 release 页面上八个文件,下载的人第一件事是
+先搞清楚该点哪个 —— 那本身就是设计失败。已经有 ClickHouse 实例的话照样
+下大包,无视里面那个 `clickhouse`、启动时加上 `-clickhouse-addr` 即可:
 
 ```bash
-curl -L -o ntop2ban https://github.com/githubflyideas/ntop2ban/releases/latest/download/ntop2ban-linux-amd64
-chmod +x ntop2ban
 sudo ./ntop2ban -iface eth0 -clickhouse-addr 127.0.0.1:9000 user=admin passwd=xxx
 ```
 
-也可以从源码构建(见文末),`go build` 一步出二进制,不需要 clang。
+嫌大也可以从源码构建(见文末),`go build` 一步出 10MB 的二进制,不需要
+clang,也不需要下 clickhouse。
 
 ## 快速开始
 
@@ -348,8 +350,9 @@ Query AST 示例:
 ```bash
 make build       # 构建 ./ntop2ban
 make check       # vet + 全部测试
-make release     # 交叉编译 {linux,darwin}/{amd64,arm64} 到 dist/
+make release     # 交叉编译 {linux,darwin}/{amd64,arm64} 到 dist/(package 的输入)
 make package     # 上面四个再各配一个 clickhouse 打成 tar.gz(要联网下 ~660MB)
+                 # 产物就是全部发行资产:四个 tar.gz + SHA256SUMS
 make verify-packages  # 用 file(1) 复核包里两个二进制的架构对得上
 ```
 

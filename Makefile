@@ -52,10 +52,15 @@ bpf-verify:
 	fi
 	@echo "bpf 目标文件与源码一致"
 
-## release: 打出各平台的发行二进制。
+## release: 交叉编译四个平台的裸二进制到 dist/。
 ##
-## 每个包里是 ntop2ban + 对应架构的 clickhouse 静态二进制,解压即可运行。
-## clickhouse 按需下载(不入库,200MB 级),CH_URL_AMD64/ARM64 可覆盖。
+## 这一步的产物是 package 的输入,**不是发行资产**。发行资产只有四个
+## tar.gz 加一个 SHA256SUMS —— 一个 release 里摆八个文件加校验和,下载
+## 的人第一件事是先搞清楚该点哪个,那本身就是设计失败。已经有 ClickHouse
+## 实例的人照样解压大包,只是无视里面那个 clickhouse、加上
+## -clickhouse-addr 就行。
+##
+## clickhouse 按需下载(不入库,200MB 级),CH_URL_* 可覆盖。
 ##
 ## amd64 用官方的 **amd64compat** 构建,不是 amd64。
 ##
@@ -81,15 +86,17 @@ release: check
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-arm64 ./cmd/ntop2ban
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-darwin-arm64 ./cmd/ntop2ban
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-darwin-amd64 ./cmd/ntop2ban
-	cd dist && sha256sum ntop2ban-linux-* ntop2ban-darwin-* > SHA256SUMS
+	@ls -lh dist/ntop2ban-*
 
 ## package: 组装"解压即跑"的大包 —— 每个包里是 ntop2ban + 同架构的
 ## clickhouse 自解压二进制 + 一页 README.txt,单个 160~185MB。
 ##
 ## 为什么值得出这么大的包:目标使用者是家用 NAS 与 Mac(见 README),那些
 ## 机器上装 ClickHouse 要么没有现成的包,要么要先装 docker。让人拷一个目录
-## 进去就能跑起来,是这个项目最省事的入口。已经有 ClickHouse 实例的人走
-## 裸二进制 + -clickhouse-addr,两条路并存。
+## 进去就能跑起来,是这个项目最省事的入口。
+##
+## 而且**只出这一种**。SHA256SUMS 在这里从头生成(不是追加),里面只有
+## 四个 tar.gz —— 它就是那份"该上传什么"的清单。
 ##
 ## 按架构分别下载 —— arm64 包里放 amd64 的二进制会在目标机上直接 exec
 ## 失败,而那个错误很难让人想到是打包错了。打完包 verify-packages 会用
@@ -123,8 +130,8 @@ package: release
 	  echo ">> $$name.tar.gz $$(du -h dist/$$name.tar.gz | cut -f1)"; \
 	done; \
 	rmdir dist/pkg
-	cd dist && sha256sum ntop2ban-*.tar.gz >> SHA256SUMS
-	@ls -lh dist/*.tar.gz
+	cd dist && sha256sum ntop2ban-*.tar.gz > SHA256SUMS
+	@echo ">> 发行资产(共 5 个):"; ls -lh dist/*.tar.gz dist/SHA256SUMS
 
 ## verify-packages: 复核每个包里的 ntop2ban 与 clickhouse 是不是同一个
 ## 架构、同一个操作系统。打错架构的包在开发机上看不出任何异常,只有目标机
