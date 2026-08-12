@@ -152,7 +152,7 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
 <main>
   <div class="err" id="err"></div>
 
-  <div class="bar">
+  <div class="bar" id="bar">
     <select id="range">
       <option value="15m">最近 15 分钟</option>
       <option value="1h" selected>最近 1 小时</option>
@@ -163,9 +163,9 @@ pre{margin:9px 0 0;padding:11px;background:#0f1520;border:1px solid var(--line);
       <option value="custom">自定义…</option>
     </select>
     <span id="custom-range" style="display:none;gap:6px;align-items:center">
-      <input type="datetime-local" id="from" step="1">
+      <input type="datetime-local" id="from">
       <span style="color:var(--dim2)">→</span>
-      <input type="datetime-local" id="to" step="1">
+      <input type="datetime-local" id="to">
     </span>
     <select id="metric">
       <option value="bytes">按字节</option>
@@ -1212,9 +1212,26 @@ function localInput(iso){
 
 function current(){ return document.querySelector('nav button.on').dataset.t; }
 
+// chrome 控制全局工具条的可见性。
+//
+// 设置页里时间范围、指标、刷新三个控件对页面内容毫无影响 —— 富化库状态、
+// 存储状态、输入源都不是按时间切片的数据。留在那里只会让人以为改了会有
+// 反应,试一次没反应就得自己推断"这里不生效"。同理,全局过滤标签也不该
+// 在设置页显示。
+function chrome(tab){
+  const settings = tab==='settings';
+  $('#bar').style.display = settings ? 'none' : 'flex';
+  $('#pills').style.display = (settings || !GLOBAL.length) ? 'none' : 'flex';
+}
+
 function load(tab){
-  const err = refreshRange();
-  if(err){ showErr(err); return; }
+  chrome(tab);
+  // 设置页不看时间范围,自定义区间填错了也不该在这里拦人 —— 用户切过来
+  // 很可能就是为了先去改别的东西。
+  if(tab!=='settings'){
+    const err = refreshRange();
+    if(err){ showErr(err); return; }
+  }
   const f={dash:loadDash,hosts:loadHosts,conv:loadConv,geo:loadGeo,
            explore:()=>{},
            settings:async()=>{ await loadOverview(); await loadSources(); }}[tab];
