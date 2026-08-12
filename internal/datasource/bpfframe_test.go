@@ -3,6 +3,8 @@ package datasource
 import (
 	"encoding/binary"
 	"testing"
+
+	"golang.org/x/net/bpf"
 )
 
 // bpfRecord 按 struct bpf_hdr 的布局拼一条记录(不含末尾对齐填充)。
@@ -156,5 +158,35 @@ func TestLinkTypeSupportedCoversWhatObserveHandles(t *testing.T) {
 	}
 	if linkTypeSupported(0x77) {
 		t.Error("未知 DLT 不该被判为支持")
+	}
+}
+
+// TestLinkFilterTruncatesEvenWhenItCannotFilter 非以太网链路上过滤器筛不了
+// 协议(偏移量对不上),但仍然必须挂一个 —— BPF 设备在没有过滤器时按整包
+// 长度拷贝,512KB 的缓冲区会被载荷吃光。挂一个 ret #snapLen 拿到截断,
+// 协议筛选让给用户态。
+func TestLinkFilterTruncatesEvenWhenItCannotFilter(t *testing.T) {
+	for _, dlt := range []int{dltNull, dltLoop, dltRaw} {
+		insts := linkFilterInstructions(dlt)
+		if len(insts) != 1 {
+			t.Fatalf("DLT=%d 的过滤器不该看任何偏移量, got %v", dlt, insts)
+		}
+		vm, err := bpf.NewVM(insts)
+		if err != nil {
+			t.Fatalf("DLT=%d NewVM: %v", dlt, err)
+		}
+		// 随便一段字节:这个过滤器不看内容,只负责收下并截断。
+		n, err := vm.Run(make([]byte, 1514))
+		if err != nil {
+			t.Fatalf("DLT=%d Run: %v", dlt, err)
+		}
+		if n != snapLen {
+			t.Errorf("DLT=%d 应收下并截断到 %d 字节, got %d", dlt, snapLen, n)
+		}
+	}
+
+	// 以太网仍然走那套会筛协议的指令。
+	if len(linkFilterInstructions(dltEthernet)) <= 1 {
+		t.Error("以太网上应挂完整的筛选过滤器")
 	}
 }

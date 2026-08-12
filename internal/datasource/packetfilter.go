@@ -97,6 +97,24 @@ func sampleFilterInstructions(samplingN int) []bpf.Instruction {
 	return insts
 }
 
+// linkFilterInstructions 按链路层类型挑过滤器。macOS 的 /dev/bpf 用,
+// Linux 只有以太网一种情况。
+//
+// 非以太网(DLT_NULL 的 lo0、DLT_RAW 的 utun*)不能用上面那套指令:里面的
+// 偏移量是按 14 字节以太网头写的,换个链路类型就读到错位的字节,而且不会
+// 报错,只会静默丢掉或放行错误的包。
+//
+// 但"不能筛"不等于"什么都不挂"。BPF 设备在没有过滤器时按整包长度拷贝,
+// 所以这里挂一个只有 ret #snapLen 的过滤器:它不看任何偏移,对任何链路
+// 类型都成立,唯一的作用就是让内核照样只拷包头。协议筛选交给用户态的
+// observeLinkFrame。
+func linkFilterInstructions(dlt int) []bpf.Instruction {
+	if dlt == dltEthernet {
+		return sampleFilterInstructions(1)
+	}
+	return []bpf.Instruction{bpf.RetConstant{Val: snapLen}}
+}
+
 // toObservation 把 flow.ParseEthernet 的结果转成聚合器要的形态。
 //
 // 解析本身在 internal/flow 里,几种输入(AF_PACKET / BPF 设备 / sFlow /

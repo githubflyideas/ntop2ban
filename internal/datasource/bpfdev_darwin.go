@@ -181,24 +181,24 @@ func (s *bpfDevSource) configure() error {
 		return fmt.Errorf("设置 BPF 读超时: %w", err)
 	}
 
-	// 过滤器只在以太网下挂:里面的偏移量(12 处的 ethertype、
-	// ethHdrLen+9 处的协议号)是按以太网头写的,DLT_NULL 与 DLT_RAW 的
-	// 头长度不同,同一份指令会读到错位的字节并静默丢错包。
-	if dlt == dltEthernet {
-		insns, err := assembleBPFDevFilter()
-		if err != nil {
-			return err
-		}
-		if err := syscall.SetBpf(s.fd, insns); err != nil {
-			return fmt.Errorf("挂载 cBPF 过滤器: %w", err)
-		}
+	// 过滤器一定要挂,哪怕链路类型不是以太网 —— 非以太网时挂的是一个只有
+	// ret #snapLen 的过滤器,不筛协议,但让内核只拷包头。不挂的话内核按
+	// 整包长度拷,一个 512KB 的缓冲区就只装得下几百个包。详见
+	// linkFilterInstructions 与 snapLen 的注释。
+	insns, err := assembleBPFDevFilter(dlt)
+	if err != nil {
+		return err
+	}
+	if err := syscall.SetBpf(s.fd, insns); err != nil {
+		return fmt.Errorf("挂载 cBPF 过滤器: %w", err)
 	}
 	return nil
 }
 
-// assembleBPFDevFilter 汇编过滤器。samplingN 传 1:抽样不在这里做。
-func assembleBPFDevFilter() ([]syscall.BpfInsn, error) {
-	raw, err := bpf.Assemble(sampleFilterInstructions(1))
+// assembleBPFDevFilter 汇编过滤器。不传 samplingN:抽样不在这里做,BSD 的
+// BPF 没有内核随机数扩展,判定在用户态的 keep() 里。
+func assembleBPFDevFilter(dlt int) ([]syscall.BpfInsn, error) {
+	raw, err := bpf.Assemble(linkFilterInstructions(dlt))
 	if err != nil {
 		return nil, fmt.Errorf("汇编 cBPF 过滤器: %w", err)
 	}
@@ -219,7 +219,8 @@ func (s *bpfDevSource) Run(ctx context.Context) error {
 			"统计外推不受影响,但高流量下 CPU 开销高于 Linux", s.samplingN)
 	}
 	if s.dlt != dltEthernet {
-		s.log.Printf("[flow] 网卡 %s 的链路层类型 DLT=%d 非以太网,未挂载内核过滤器,全部包进用户态筛选", s.iface, s.dlt)
+		s.log.Printf("[flow] 网卡 %s 的链路层类型 DLT=%d 非以太网,内核只做截断不做协议筛选,"+
+			"全部包进用户态筛选", s.iface, s.dlt)
 	}
 
 	for {
