@@ -291,19 +291,39 @@ func TestLongSpanUsesAggTableWhenPossible(t *testing.T) {
 	}
 }
 
-// TestMetricUnavailableOnAggTableIsAnError 基数类指标在聚合表上算不出来
-// (同一个 IP 在多个分钟桶里被合并)。必须明确报错 —— 静默返回 0 的话
-// 用户会看到一列全 0 并信以为真。
-func TestMetricUnavailableOnAggTableIsAnError(t *testing.T) {
+// TestMetricUnavailableOnAggTableFallsBackToRaw 基数类指标在聚合表上算不
+// 出来(同一个 IP 在多个分钟桶里被合并),所以自动选表时要选明细表。
+//
+// 这里以前是报错。改成退回明细表的理由:界面上没有"换一张表"这个开关,
+// 报错对用户来说是一条走不通的路;而明细表上这个数字是算得出来且正确的。
+// "绝不静默返回 0"那条保证没有放松 —— 见下面那个显式指定表的用例。
+func TestMetricUnavailableOnAggTableFallsBackToRaw(t *testing.T) {
 	q := baseQuery()
 	q.Interval = "hour"
 	q.Metrics = []string{"uniq_src_ip"}
 	if err := q.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+	c := mustCompile(t, q)
+	if c.Table != "flows" {
+		t.Fatalf("基数指标应退回明细表, got %s", c.Table)
+	}
+	if !strings.Contains(c.SQL, "uniqExact(src_ip) AS uniq_src_ip") {
+		t.Errorf("SQL:\n%s", c.SQL)
+	}
+}
+
+// TestMetricUnavailableOnExplicitAggTableIsAnError 调用方明确说了要查
+// flows_1m,那就必须报错而不是悄悄换表 —— 也不能静默返回 0,那样用户
+// 会看到一列全 0 并信以为真。
+func TestMetricUnavailableOnExplicitAggTableIsAnError(t *testing.T) {
+	q := baseQuery()
+	q.Table = "flows_1m"
+	q.Interval = "hour"
+	q.Metrics = []string{"uniq_src_ip"}
 	_, err := Compile(q)
 	if err == nil {
-		t.Fatal("基数指标在聚合表上应报错")
+		t.Fatal("聚合表上的基数指标应报错")
 	}
 	if !strings.Contains(err.Error(), "flows") {
 		t.Errorf("错误应指引用户指定 table=flows: %v", err)
@@ -498,5 +518,90 @@ func TestFieldsInfoIsServedFromBackend(t *testing.T) {
 		if f.Kind == "" {
 			t.Errorf("字段 %s 缺少类型", f.Name)
 		}
+	}
+}
+
+// TestTimeSeriesOutsideAggDimsUsesRawTable 时间序列 + 聚合表没有的维度
+// 必须退回明细表。
+//
+// 这是线上暴出来的 bug:界面"流量趋势"选"按目的端口堆叠"时,planTable
+// 只看到 Interval 非空就选了 flows_1m,而 flows_1m 里根本没有 dst_port 列
+// (刻意收窄,端口会让基数爆炸),ClickHouse 直接报
+// "Unknown expression identifier `dst_port`"。用户在界面上选的是"按端口
+// 看趋势",没有义务知道分层存储的存在 —— 选表是引擎的责任。
+func TestTimeSeriesOutsideAggDimsUsesRawTable(t *testing.T) {
+	for _, dim := range []string{"dst_port", "src_port", "src_org", "dst_city"} {
+		q := baseQuery()
+		q.Interval = "minute"
+		q.GroupBy = []string{dim}
+		c := mustCompile(t, q)
+		if c.Table != "flows" {
+			t.Errorf("按 %s 做时间序列应走明细表, got %s", dim, c.Table)
+		}
+		if !strings.Contains(c.SQL, "toStartOfMinute(timestamp) AS ts") {
+			t.Errorf("%s: 明细表的时间桶应基于 timestamp:\n%s", dim, c.SQL)
+		}
+	}
+}
+
+// TestTimeSeriesFilterOutsideAggDimsUsesRawTable 过滤条件里的字段同样决定
+// 选表。趋势图按端口堆叠时会带 dst_port IN (...) 把范围限制在 Top N 端口上,
+// 只看 GROUP BY 不看 WHERE 一样会撞上不存在的列。
+func TestTimeSeriesFilterOutsideAggDimsUsesRawTable(t *testing.T) {
+	q := baseQuery()
+	q.Interval = "minute"
+	q.GroupBy = []string{"application"}
+	q.Filters = Condition{Op: OpAnd, Conditions: []Condition{
+		{Field: "dst_port", Operator: OpIn, Value: []any{53, 443}},
+	}}
+	c := mustCompile(t, q)
+	if c.Table != "flows" {
+		t.Fatalf("过滤 dst_port 应走明细表, got %s", c.Table)
+	}
+	if !strings.Contains(c.SQL, "FROM flows\n") {
+		t.Errorf("SQL:\n%s", c.SQL)
+	}
+}
+
+// TestLongSpanFilterOutsideAggDimsUsesRawTable 长跨度那条捷径也一样:
+// 原来只检查了 GroupBy 与 Metrics,漏了 Filters。
+func TestLongSpanFilterOutsideAggDimsUsesRawTable(t *testing.T) {
+	q := baseQuery()
+	q.TimeRange.To = q.TimeRange.From.Add(30 * 24 * time.Hour)
+	q.GroupBy = []string{"src_country"}
+	q.Filters = Condition{Field: "dst_port", Operator: OpEq, Value: 53}
+	c := mustCompile(t, q)
+	if c.Table != "flows" {
+		t.Errorf("过滤 dst_port 应走明细表, got %s", c.Table)
+	}
+}
+
+// TestExplicitAggTableRejectsMissingDim 调用方显式指定 table=flows_1m 时不要
+// 悄悄改成明细表 —— 那样它就永远得不到"这张表答不了"的反馈。但报错要在
+// 编译期给出来,而不是把 SQL 送到 ClickHouse 换回一句
+// "Unknown expression identifier `dst_port`" —— 那句话指不到任何操作方向。
+func TestExplicitAggTableRejectsMissingDim(t *testing.T) {
+	q := baseQuery()
+	q.Table = "flows_1m"
+	q.Interval = "minute"
+	q.GroupBy = []string{"dst_port"}
+	_, err := Compile(q)
+	if err == nil {
+		t.Fatal("聚合表上按 dst_port 分组应在编译期报错")
+	}
+	if !strings.Contains(err.Error(), "dst_port") || !strings.Contains(err.Error(), "明细表") {
+		t.Errorf("错误信息应点明字段并指出出路: %v", err)
+	}
+}
+
+// TestExplicitAggTableRejectsMissingFilterField 过滤字段同理。
+func TestExplicitAggTableRejectsMissingFilterField(t *testing.T) {
+	q := baseQuery()
+	q.Table = "flows_1m"
+	q.Interval = "minute"
+	q.Filters = Condition{Field: "src_city", Operator: OpEq, Value: "Tokyo"}
+	_, err := Compile(q)
+	if err == nil || !strings.Contains(err.Error(), "src_city") {
+		t.Fatalf("聚合表上过滤 src_city 应报错并点明字段, got %v", err)
 	}
 }

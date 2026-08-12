@@ -49,6 +49,18 @@ func Compile(q Query) (Compiled, error) {
 		groupBy = append(groupBy, "ts")
 	}
 
+	// 显式指定了聚合表时,先把"这张表没有这个维度/字段"讲清楚。自动选表
+	// 的路径走不到这里(planTable 已经排掉了),所以这条只服务于调用方明确
+	// 写了 table=flows_1m 的情况 —— 否则用户拿到的是 ClickHouse 的
+	// "Unknown expression identifier",那个报错指不到任何操作方向。
+	if agg {
+		if bad := firstNonAggField(q); bad != "" {
+			return Compiled{}, fmt.Errorf(
+				"字段 %q 不在分钟聚合表里(端口、城市、组织等维度只存在于明细表);"+
+					"去掉 table=flows_1m 让引擎自动选表,或指定 table=flows", bad)
+		}
+	}
+
 	for _, g := range q.GroupBy {
 		col := groupableFields[g]
 		// IP 列转成字符串输出:驱动返回 net.IP,直接进 JSON 是字节数组。
@@ -184,14 +196,77 @@ WHERE timestamp >= ? AND timestamp < ?`
 func planTable(q Query) string {
 	span := q.TimeRange.To.Sub(q.TimeRange.From)
 
+	// 聚合表答不上来就没得选,先排除。界面上用户选的是"按目的端口看
+	// 趋势",他没有义务知道分层存储的存在;把 Interval 当成"用聚合表"
+	// 的同义词,一旦维度或过滤字段不在聚合表里,ClickHouse 会报
+	// Unknown expression identifier —— 用户看到的是一个指不到任何操作
+	// 方向的报错。选表是引擎的责任。
+	if !aggCanAnswer(q) {
+		return "flows"
+	}
+
 	if q.Interval != "" {
 		return "flows_1m"
 	}
 	// 无时间粒度但跨度很大、且分组维度都在聚合表里 → 也可以用聚合表。
-	if span > 3*24*time.Hour && groupableInAgg(q.GroupBy) && metricsInAgg(q.Metrics) {
+	if span > 3*24*time.Hour {
 		return "flows_1m"
 	}
 	return "flows"
+}
+
+// aggCanAnswer 判断分钟聚合表能不能回答这个查询。
+//
+// 三处都要看:GROUP BY 的维度、WHERE 里出现的字段、以及指标。漏掉 WHERE
+// 是原来那个 bug 的一半 —— 趋势图按端口堆叠时会带上
+// dst_port IN (Top N 端口) 把范围收窄,只检查 GROUP BY 的话照样撞上
+// flows_1m 里不存在的列。
+//
+// 指标这里只做选表参考:真正"这个指标在聚合表上算不出来"的报错留在
+// Compile 里,因为调用方可能显式指定了 table=flows_1m,那种情况下应该
+// 得到明确的失败而不是被悄悄换表。
+func aggCanAnswer(q Query) bool {
+	return groupableInAgg(q.GroupBy) &&
+		metricsInAgg(q.Metrics) &&
+		fieldsInAgg(q.Filters)
+}
+
+// firstNonAggField 返回第一个不在聚合表里的分组维度或过滤字段,都在则返回 ""。
+func firstNonAggField(q Query) string {
+	for _, g := range q.GroupBy {
+		if !aggDims[g] {
+			return g
+		}
+	}
+	return firstNonAggFilter(q.Filters)
+}
+
+func firstNonAggFilter(c Condition) string {
+	if c.isLeaf() {
+		if !aggDims[c.Field] {
+			return c.Field
+		}
+		return ""
+	}
+	for _, sub := range c.Conditions {
+		if f := firstNonAggFilter(sub); f != "" {
+			return f
+		}
+	}
+	return ""
+}
+
+// fieldsInAgg 递归检查过滤条件里引用的字段是否都存在于聚合表。
+func fieldsInAgg(c Condition) bool {
+	if c.isLeaf() {
+		return aggDims[c.Field]
+	}
+	for _, sub := range c.Conditions {
+		if !fieldsInAgg(sub) {
+			return false
+		}
+	}
+	return true
 }
 
 // aggDims 是 flows_1m 里存在的维度(见 store/schema.go 的 ORDER BY)。
