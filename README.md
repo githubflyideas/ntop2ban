@@ -48,6 +48,22 @@ ntop2ban-linux-amd64/
 ```
 
 压缩包约 208MB(clickhouse 那个文件本身 176MB,首次运行时自解压到 771MB)。
+
+Release 里另有 `ntop2ban-darwin-arm64` / `ntop2ban-darwin-amd64` 两个裸
+二进制(不带 clickhouse)。**macOS 上只能收 sFlow/NetFlow,不能 `-input
+local`** —— XDP 与 AF_PACKET 是 Linux 内核接口,没有跨平台对应物。Mac 版
+存在的意义是拿一台笔记本就能把"收流 → 存 → 查 → 看图"这条链路跑通:
+
+```bash
+# clickhouse 自己下一个 darwin 构建,ntop2ban 负责拉起与托管
+curl -L -o clickhouse https://builds.clickhouse.com/master/macos-aarch64/clickhouse
+chmod +x clickhouse && xattr -d com.apple.quarantine clickhouse   # 绕过 Gatekeeper
+xattr -d com.apple.quarantine ntop2ban-darwin-arm64
+./ntop2ban-darwin-arm64 -input netflow -clickhouse-bin ./clickhouse user=admin passwd=你的密码
+```
+
+不加 `-input netflow` 也能起来:`local` 会打印一行"本机采集未启动:
+……只在 Linux 上可用"然后继续,界面和其他输入源照常可用。
 这是"不装数据库"的代价:ClickHouse 是唯一存储,没有兜底后端,所以它必须
 在包里。
 
@@ -98,7 +114,7 @@ sudo ./ntop2ban -iface eth0 user=admin passwd=你的密码
 
 | 输入 | 适用 | 说明 |
 |---|---|---|
-| `local` | 单机、NAS、家用 | XDP/eBPF 抓本机网卡,不需要交换机配合 |
+| `local` | 单机、NAS、家用 | XDP/eBPF 抓本机网卡,不需要交换机配合;**仅 Linux** |
 | `sflow` | IDC、企业交换网络 | 远端设备 UDP 送采样包头,默认 6343 |
 | `netflow` | 同上 | NetFlow v5,默认 2055 |
 

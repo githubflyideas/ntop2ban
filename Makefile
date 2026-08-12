@@ -52,7 +52,7 @@ bpf-verify:
 	fi
 	@echo "bpf 目标文件与源码一致"
 
-## release: 打出两个架构的发行包。
+## release: 打出各平台的发行二进制。
 ##
 ## 每个包里是 ntop2ban + 对应架构的 clickhouse 静态二进制,解压即可运行。
 ## clickhouse 按需下载(不入库,200MB 级),CH_URL_AMD64/ARM64 可覆盖。
@@ -68,11 +68,17 @@ bpf-verify:
 CH_URL_AMD64 ?= https://builds.clickhouse.com/master/amd64compat/clickhouse
 CH_URL_ARM64 ?= https://builds.clickhouse.com/master/aarch64/clickhouse
 
+## darwin 产物只支持 sFlow/NetFlow 输入,不支持 -input local:XDP 与
+## AF_PACKET 是 Linux 内核接口。之所以仍然出 Mac 二进制,是因为"收交换机
+## 导出的流 + 看界面"这条路径与内核无关,而它恰好是最常用的验证方式,
+## 让人为此先找一台 Linux 机器是没必要的门槛。
 release: check
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-amd64 ./cmd/ntop2ban
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-linux-arm64 ./cmd/ntop2ban
-	cd dist && sha256sum ntop2ban-linux-* > SHA256SUMS
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-darwin-arm64 ./cmd/ntop2ban
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/ntop2ban-darwin-amd64 ./cmd/ntop2ban
+	cd dist && sha256sum ntop2ban-linux-* ntop2ban-darwin-* > SHA256SUMS
 
 ## package: 组装成 tar.gz。分架构下载 clickhouse —— arm64 包里放 amd64 的
 ## 二进制会在目标机上直接 exec 失败,而那个错误很难让人想到是打包错了。
