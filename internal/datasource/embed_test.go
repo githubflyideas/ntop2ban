@@ -21,10 +21,17 @@ func TestEmbeddedBytecodeIsRealProgram(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析内嵌 bytecode: %v", err)
 	}
-	if _, ok := spec.Programs["xdp_sampler"]; !ok {
-		t.Errorf("bytecode 里没有 xdp_sampler 程序,attach 时会失败")
+	// xdp_sampler 只管入向。出向那两个程序缺一个都意味着上传流量在某类
+	// 内核上会静默丢失:tc_egress_sampler 是 6.6+ 的正路,
+	// cgroup_egress_sampler 是老内核的退路。少了退路的话,Debian 12 这种
+	// 6.1 的机器上出向就彻底没有了,而日志只会说"没挂上",看不出是
+	// 编译时漏了程序。
+	for _, prog := range []string{"xdp_sampler", "tc_egress_sampler", "cgroup_egress_sampler"} {
+		if _, ok := spec.Programs[prog]; !ok {
+			t.Errorf("bytecode 里没有 %s 程序,attach 时会失败", prog)
+		}
 	}
-	for _, m := range []string{"sampling_rate", "sample_events"} {
+	for _, m := range []string{"sampling_rate", "sample_events", "egress_ifindex"} {
 		if _, ok := spec.Maps[m]; !ok {
 			t.Errorf("bytecode 里没有 %s map,configure/openReaders 时会失败", m)
 		}

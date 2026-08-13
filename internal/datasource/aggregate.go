@@ -64,6 +64,18 @@ type Observation struct {
 	Length   int
 	TCPFlags uint16
 	VLAN     uint16
+
+	// Packets 是这一次观测代表的网线包数。0 视同 1。
+	//
+	// 绝大多数情况就是 1:一个包一次观测。例外是出向的 TC 钩子——大块
+	// 发送在那里还没被 TSO 切片,一个 skb 对应网线上几十个包,Length 也是
+	// 切片前的大长度。这时字节数是对的而包数会少算几十倍,上传的 pps 看
+	// 起来会莫名低于下载。所以让数据源把"这次代表几个包"一起报上来。
+	Packets int
+
+	// Egress 标记这是出向观测。入向来自 XDP,出向来自 TC 或
+	// cgroup_skb/egress —— 两者进同一个聚合器、同一套口径。
+	Egress bool
 }
 
 const (
@@ -99,9 +111,14 @@ func (a *aggregator) add(o Observation) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	pkts := int64(o.Packets)
+	if pkts < 1 {
+		pkts = 1
+	}
+
 	now := time.Now()
 	if agg, ok := a.flows[k]; ok {
-		agg.pkts++
+		agg.pkts += pkts
 		agg.bytes += int64(o.Length)
 		agg.lastSeen = now
 		agg.tcpFlags |= o.TCPFlags
@@ -114,7 +131,7 @@ func (a *aggregator) add(o Observation) {
 		return
 	}
 	a.flows[k] = &flowAgg{
-		pkts: 1, bytes: int64(o.Length),
+		pkts: pkts, bytes: int64(o.Length),
 		firstSeen: now, lastSeen: now,
 		tcpFlags: o.TCPFlags, vlan: o.VLAN,
 	}

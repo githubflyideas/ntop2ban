@@ -517,3 +517,38 @@ func TestDefaultSamplingIsPlatformDependent(t *testing.T) {
 		t.Errorf("DefaultSamplingN 与当前平台不符: %d", DefaultSamplingN)
 	}
 }
+
+// TSO/GSO:出向在 TC 钩子上看到的是一个还没切片的大 skb,内核之后会把它
+// 拆成几十个网线包。按"一条观测算一个包"来计,字节数是对的、包数会少
+// 四十倍,于是 pps 曲线与流量曲线互相矛盾 —— 一条 1.5Gbps 的上传显示成
+// 每秒两千个包。所以 Observation 带上 Packets,聚合器按它累加。
+//
+// 反过来 Packets 为 0 时必须按 1 算而不是 0:那是老 bytecode 配新二进制
+// 的情形,包数凭空消失比少算更难查。
+func TestAggregatorHonoursPacketCount(t *testing.T) {
+	sink := &fakeSink{}
+	agg := newAggregator(1, DefaultMaxFlows, sink, discardLogger())
+
+	big := obs("203.0.113.7", "198.51.100.1", 40000, 443, 6, 64000)
+	big.Packets = 44 // 一个 64KB 的 TSO skb,MTU 1500 下切成 44 个包
+	agg.add(big)
+
+	zero := obs("203.0.113.7", "198.51.100.1", 40000, 443, 6, 100)
+	zero.Packets = 0
+	agg.add(zero)
+
+	agg.flush(context.Background())
+
+	flows := sink.all()[0]
+	if len(flows) != 1 {
+		t.Fatalf("同一五元组应聚成一条流, got %d", len(flows))
+	}
+	f := flows[0]
+	if f.ObservedPackets != 45 {
+		t.Errorf("包数应为 44+1=45,得到 %d(TSO 段数没被计入,或 0 被当成 0 算了)",
+			f.ObservedPackets)
+	}
+	if f.ObservedBytes != 64100 {
+		t.Errorf("字节数应为 64100,得到 %d", f.ObservedBytes)
+	}
+}

@@ -21,9 +21,18 @@ import (
 type xdpSource struct {
 	mode Mode
 	coll *ebpf.Collection
-	lnk  link.Link
+
+	lnk       link.Link
+	egressLnk link.Link
+	// egressHook 记下出向最终挂在哪个钩子上(TCX 还是 cgroup),空表示没挂上。
+	egressHook string
 
 	sampleRD *ringbuf.Reader
+
+	// 第一条出向观测只打一行日志。出向能不能真的采到,取决于内核版本、
+	// 钩子类型和 ifindex 过滤三件事,而这三件事都不会在 attach 时报错——
+	// 挂上了不等于有数据。所以在数据真的流过来时说一声。
+	firstEgress sync.Once
 
 	agg *aggregator
 	log *log.Logger
@@ -63,14 +72,9 @@ func openXDP(mode Mode, cfg Config, lg *log.Logger) (Source, error) {
 		}
 	})
 
-	spec, err := loadSpec()
+	coll, err := loadCollection(lg)
 	if err != nil {
 		return nil, &ErrUnavailable{Mode: mode, Reason: err}
-	}
-
-	coll, err := ebpf.NewCollection(spec)
-	if err != nil {
-		return nil, &ErrUnavailable{Mode: mode, Reason: fmt.Errorf("加载 eBPF 程序: %w", err)}
 	}
 
 	s := &xdpSource{
@@ -90,6 +94,8 @@ func openXDP(mode Mode, cfg Config, lg *log.Logger) (Source, error) {
 		s.Close()
 		return nil, &ErrUnavailable{Mode: mode, Reason: err}
 	}
+
+	s.attachEgressOrWarn(cfg.Iface)
 
 	if err := s.openReaders(); err != nil {
 		s.Close()
@@ -197,6 +203,11 @@ func (s *xdpSource) readSamples(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		if ev.Egress {
+			s.firstEgress.Do(func() {
+				s.log.Printf("[flow] 出向采集已出数据(钩子 %s)", s.egressHook)
+			})
+		}
 		s.agg.add(ev)
 	}
 }
@@ -204,6 +215,9 @@ func (s *xdpSource) readSamples(ctx context.Context) error {
 func (s *xdpSource) Close() error {
 	if s.sampleRD != nil {
 		s.sampleRD.Close()
+	}
+	if s.egressLnk != nil {
+		s.egressLnk.Close()
 	}
 	if s.lnk != nil {
 		s.lnk.Close()

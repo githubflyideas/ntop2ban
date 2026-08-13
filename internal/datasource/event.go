@@ -24,9 +24,10 @@ import (
 //	struct sample_event {
 //	    __u32 src_ip; __u32 dst_ip;
 //	    __u16 src_port; __u16 dst_port; __u16 pkt_len;
-//	    __u8 proto; __u8 _pad;
-//	};  // 16 字节
-const sampleEventSize = 16
+//	    __u8 proto; __u8 dir;
+//	    __u16 segs; __u16 _pad;
+//	};  // 20 字节
+const sampleEventSize = 20
 
 //	struct knock_event {
 //	    __u32 src_ip; __u16 value; __u8 kind; __u8 _pad;
@@ -48,8 +49,24 @@ func parseSampleEvent(raw []byte) (Observation, error) {
 	o.DstPort = nativeUint16(raw[10:12])
 	o.Length = int(nativeUint16(raw[12:14]))
 	o.Proto = raw[14]
+	o.Egress = raw[15] == dirEgress
+
+	// segs 是这一个 skb 在网线上实际会变成几个包(TSO/GSO)。入向恒为 1;
+	// 出向在 TC 钩子上可能是几十。0 不该出现,但真出现时按 1 算而不是 0
+	// ——按 0 算会让这条观测的包数凭空消失,而字节数还在,pps 与流量图
+	// 会互相矛盾。
+	o.Packets = int(nativeUint16(raw[16:18]))
+	if o.Packets < 1 {
+		o.Packets = 1
+	}
 	return o, nil
 }
+
+// dir 字段的取值,与 bpf/sampler.c 里的 DIR_INGRESS / DIR_EGRESS 对应。
+const (
+	dirIngress = 0
+	dirEgress  = 1
+)
 
 // nativeUint16 按本机字节序解析。
 //
