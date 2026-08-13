@@ -369,10 +369,6 @@ make bpf-verify  # 重新编译并与库里的 .o 比对(CI 跑这个)
 dst_port)` 对应最高频的"最近 1h/24h + 某个 IP"。设计文档明确要求最终
 必须由真实 query benchmark 决定,而不是凭经验 —— 这件事还没做。
 
-**eBPF 字节码是占位空文件。** 构建环境装不上 clang,所以库里的
-`sampler.o` 是空的,XDP 两级会自动降级到 AF_PACKET。要用上 XDP 请在
-有 `clang` + `libbpf-dev` 的机器上 `make bpf && make build`。
-
 ## License
 
 Apache-2.0

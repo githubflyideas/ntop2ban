@@ -6,7 +6,7 @@
  *
  * 编译(需要 clang + libbpf-dev):
  *   make bpf
- * 产物 cmd/ntop2ban/obj/sampler.o 提交进库,这样最终用户 go build
+ * 产物 internal/datasource/obj/sampler.o 提交进库,这样最终用户 go build
  * 一步出二进制、不需要 clang;只有改动本文件的维护者才需要。
  * CI 会重新编译并比对,防止 .o 与 .c 漂移。
  */
@@ -17,8 +17,13 @@
 #include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
-#include <linux/icmp.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+/* 故意不 include <linux/icmp.h>:它经由 linux/if.h 拉进 glibc 的
+ * sys/socket.h,而 -target bpf 不定义 __x86_64__,于是 features.h
+ * 走 32 位分支去找 gnu/stubs-32.h、编译直接失败。这里只需要
+ * IPPROTO_ICMP,那个常量在 linux/in.h 里已经有了。 */
 
 /* ---- 采样配置 ---- */
 

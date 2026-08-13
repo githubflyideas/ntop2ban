@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/cilium/ebpf/rlimit"
 )
 
 // xdpSource 是 XDP 数据源,native 与 generic 共用同一份实现——
@@ -33,11 +35,33 @@ type xdpSource struct {
 //
 // bytecode 为空时直接判定为不可用,让调用方降级——这发生在从源码构建
 // 但没跑 make bpf 的情况下。给出明确的原因比一个 verifier 错误可读。
+var memlockOnce sync.Once
+
 func openXDP(mode Mode, cfg Config, lg *log.Logger) (Source, error) {
 	if len(samplerBytecode) == 0 {
 		return nil, &ErrUnavailable{Mode: mode,
 			Reason: errors.New("内嵌 eBPF bytecode 为空(从源码构建需先执行 make bpf)")}
 	}
+
+	// 老内核(<5.11)把 BPF map 的内存算在 RLIMIT_MEMLOCK 上,而默认上限
+	// 是 64KB —— 光是那个 1MB 的 ringbuf 就超了,即使以 root 运行也会在
+	// 建 map 时拿到 "operation not permitted",而这个报错一点也看不出跟
+	// rlimit 有关,足够让人往权限和 SELinux 上找半天。所以先抬一下。
+	//
+	// 抬不起来只警告、不据此判定 XDP 不可用:抬 rlimit 要 CAP_SYS_RESOURCE,
+	// 而 5.11 之后的内核走 memcg 记账、根本不看这个上限。只有 CAP_BPF +
+	// CAP_NET_ADMIN 的新内核环境本来跑得好好的,没道理因为少一个无关的
+	// capability 就被赶去 AF_PACKET。真不行的话下面建 map 时自然会失败,
+	// 那条错误照样报得出来。
+	// 用 sync.Once 包着,是因为 openXDP 会被调用两次(native 然后 generic),
+	// 而抬 rlimit 是进程级的一次性动作 —— 不包的话失败的警告会一字不差地
+	// 连打两遍,又变成噪音。
+	memlockOnce.Do(func() {
+		if err := rlimit.RemoveMemlock(); err != nil {
+			lg.Printf("[flow] 放开 RLIMIT_MEMLOCK 失败(%v)——"+
+				"内核 >=5.11 不需要它,继续;老内核上建 map 可能会失败", err)
+		}
+	})
 
 	spec, err := loadSpec()
 	if err != nil {

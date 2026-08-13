@@ -14,7 +14,11 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 
 BPF_SRC := bpf/sampler.c
 BPF_OBJ := internal/datasource/obj/sampler.o
-BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror
+# -I 那一条不是可选的:-target bpf 时 clang 不会自动去看
+# /usr/include/<arch>-linux-gnu,而 linux/types.h 第一行就要 asm/types.h。
+# 少了它编译停在 "'asm/types.h' file not found"。
+BPF_ARCH_INC := /usr/include/$(shell uname -m)-linux-gnu
+BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_x86 -Wall -Werror -I$(BPF_ARCH_INC)
 
 .PHONY: build test check fmt vet bpf bpf-verify release package verify-packages clean
 
