@@ -4,8 +4,7 @@
 
 单机 Flow Analytics 平台。XDP/eBPF 采集 + ClickHouse 存储 + 灵活查询。
 
-一个二进制,拷过去就跑。不需要 Elasticsearch、不需要装数据库、不需要
-Docker、不需要 Java。
+一个二进制,拷过去就跑。不需要 Elasticsearch、不需要装数据库
 
 ---
 
@@ -16,19 +15,6 @@ Analytics 的能力:Top Talker / Conversation / ASN / Country / Port /
 Protocol / 时间序列 / 下钻,输入支持本机 XDP、远端 sFlow v5、远端
 NetFlow v5。
 
-与 [xdp-ban](https://github.com/githubflyideas/xdp-ban) 的边界很清楚:
-
-```
-ntop2ban              xdp-ban
-Observe               Decide
-Analyze      ──→      Approve
-Understand            Enforce / Audit
-```
-
-ntop2ban 不做封禁,只在发现可疑源时把事件推给 xdp-ban,由那边决定
-放行/阻断/待审批。链路探测也不在这里,那是
-[pingping](https://github.com/githubflyideas/pingping) 的事。
-这个程序只做一件事:把流量看清楚。
 
 ## 下载
 
@@ -101,17 +87,10 @@ xdp-native` 之类在 Mac 上不存在,只有 `bpf-device` 一级。
 错误完全指不到"换个 clickhouse 构建"这个方向。牺牲一点性能换普遍可运行,
 对单机部署是正确的取舍。
 
-**每个 release 里只有这四个包加一个 `SHA256SUMS`,没有别的。** 早先还
-同时发四个裸二进制,结果一个 release 页面上八个文件,下载的人第一件事是
-先搞清楚该点哪个 —— 那本身就是设计失败。已经有 ClickHouse 实例的话照样
-下大包,无视里面那个 `clickhouse`、启动时加上 `-clickhouse-addr` 即可:
-
 ```bash
 sudo ./ntop2ban -iface eth0 -clickhouse-addr 127.0.0.1:9000 user=admin passwd=xxx
 ```
 
-嫌大也可以从源码构建(见文末),`go build` 一步出 10MB 的二进制,不需要
-clang,也不需要下 clickhouse。
 
 ## 快速开始
 
