@@ -524,3 +524,27 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// 默认端口必须是行业标准的那两个。
+//
+// Why: sFlow 的 6343 和 NetFlow 的 2055 是交换机、路由器出厂配置里写着的
+// 目的端口。默认值只要偏一点,用户按设备手册配好 exporter、这边什么都收不
+// 到,而两侧日志都不会报错 —— UDP 没有连接概念,发出去就完了。这种"静默
+// 不工作"最难查,所以把两个数字钉死在测试里。
+//
+// 端口仍然可配(-sflow-listen / -netflow-listen):同一台机器上可能已经有
+// 别的 collector 占着标准端口。可配与"默认就是标准值"不矛盾。
+func TestDefaultPortsAreTheStandardOnes(t *testing.T) {
+	if DefaultSFlowPort != 6343 {
+		t.Errorf("sFlow 默认端口应为 6343,得到 %d", DefaultSFlowPort)
+	}
+	if DefaultNetFlowPort != 2055 {
+		t.Errorf("NetFlow 默认端口应为 2055,得到 %d", DefaultNetFlowPort)
+	}
+	// 两个都在 1024 以上,普通用户也能 bind —— 只收远端 flow 时不需要 root。
+	for name, p := range map[string]int{"sflow": DefaultSFlowPort, "netflow": DefaultNetFlowPort} {
+		if p <= 1024 {
+			t.Errorf("%s 默认端口 %d 落在特权端口区间,只收远端数据就得 root 了", name, p)
+		}
+	}
+}
