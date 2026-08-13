@@ -91,6 +91,13 @@ struct sample_event {
     __u16 _pad;
 };
 
+/* 布局是与 Go 侧的跨语言契约,internal/datasource/event.go 按固定偏移解析。
+ * Go 侧有测试盯住字段顺序,但盯不住 C 编译器插进来的对齐填充:加一个
+ * __u8 字段就可能让 sizeof 从 20 变 24,而 Go 侧照旧按 20 解析、每条事件
+ * 都错位,不报错只出垃圾数据。所以在 C 侧把大小钉死。 */
+_Static_assert(sizeof(struct sample_event) == 20,
+               "sample_event 大小变了,internal/datasource/event.go 的偏移量必须同步改");
+
 /* ---- 全局计数,供界面展示"采样器在正常工作" ---- */
 struct global_stats {
     __u64 total_packets;
@@ -246,7 +253,7 @@ int tc_egress_sampler(struct __sk_buff *ctx)
 
     /* TSO/GSO:到这个钩子时大块发送还没有被切片,一个 skb 可能对应网线上
      * 几十个包,IP 头里的 tot_len 也是那个没切之前的大长度。字节数因此仍
-     * 然是对的,但"包数"会少算几十倍——上传的 pps 会明显低于下载,而这种
+     * 然基本是对的(差的是多出来的那几十份 IP+TCP 头,约 3%),但"包数"会少算几十倍——上传的 pps 会明显低于下载,而这种
      * 不对称看起来完全像是采集坏了。gso_segs 就是切片后的包数,拿它来当
      * 这次观测的包数。非 GSO 的普通包 gso_segs 是 0,按 1 算。 */
     __u16 segs = ctx->gso_segs;
