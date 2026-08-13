@@ -46,15 +46,19 @@ bpf:
 
 ## bpf-verify: 重新编译并与库里的 .o 比对。CI 跑这个,防止改了 .c 忘了重编——
 ## 那样 .o 与 .c 会静默漂移,运行时行为与源码不符,极难排查。
+## 整个配方写在一条 shell 里:make 的每一行是独立的 shell,前一行的
+## exit 0 只结束那一行、后面照样跑 —— 原先"没有 clang 就跳过"那句
+## 打了跳过的字然后仍旧去调 clang,再以 127 失败。
 bpf-verify:
-	@command -v $(CLANG) >/dev/null || \
-	  { echo "跳过 bpf-verify:本机没有 $(CLANG)"; exit 0; }
-	@mkdir -p /tmp/ntop2ban-bpfverify
-	$(CLANG) $(BPF_CFLAGS) -c $(BPF_SRC) -o /tmp/ntop2ban-bpfverify/sampler.o
-	@if ! cmp -s /tmp/ntop2ban-bpfverify/sampler.o $(BPF_OBJ); then \
+	@if ! command -v $(CLANG) >/dev/null; then \
+	  echo "跳过 bpf-verify:本机没有 $(CLANG)"; exit 0; \
+	fi; \
+	mkdir -p /tmp/ntop2ban-bpfverify && \
+	$(CLANG) $(BPF_CFLAGS) -c $(BPF_SRC) -o /tmp/ntop2ban-bpfverify/sampler.o && \
+	if ! cmp -s /tmp/ntop2ban-bpfverify/sampler.o $(BPF_OBJ); then \
 	  echo "$(BPF_OBJ) 与 $(BPF_SRC) 不一致 —— 请执行 make bpf 并提交产物"; exit 1; \
-	fi
-	@echo "bpf 目标文件与源码一致"
+	fi; \
+	echo "bpf 目标文件与源码一致"
 
 ## release: 交叉编译四个平台的裸二进制到 dist/。
 ##
