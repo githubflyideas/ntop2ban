@@ -131,6 +131,37 @@ sFlow 送的是**采样到的原始包头**(不是聚合好的 flow 记录),所�
 本机抓包那份包解析 —— 解出来的东西完全同构,这是"Input 可替换,
 Flow Model 不变"的落点。
 
+### 收 sFlow:一次跑通
+
+```bash
+./ntop2ban -input sflow user=admin passwd=你的密码
+# 日志里应该出现:sFlow v5 监听 :6343
+```
+
+端口已经是标准的 **6343**,交换机那边照设备手册填默认值就能对上,不用改
+参数。要换端口才给 `-sflow-listen :16343` —— 端口不写死是因为一台机器上
+可能已经有别的 collector 占着 6343。
+
+**不需要 root。** 6343 和 NetFlow 的 2055 都在 1024 以上,普通用户就能
+bind。只收远端数据时整个进程都不碰网卡,所以别习惯性加 `sudo`。
+
+导出侧(交换机 / 路由器 / Open vSwitch)填三样:collector 地址是跑
+ntop2ban 这台机器的 IP、端口 6343、采样率按链路带宽给(千兆给 1/1000
+量级)。**记得放开防火墙的 UDP 6343**,这是最常见的"什么都没收到"的原因,
+而 UDP 两边都不会报错。
+
+确认数据真的进来了,按这个顺序看:
+
+先看日志有没有 `[sflow] 解码失败` —— 有,说明包收到了但格式对不上(常见是
+设备发的是 sFlow v4 或 NetFlow,认错了协议)。一条也没有、界面也全是 0,
+那就是包根本没到,回去查防火墙和导出侧配置,`tcpdump -ni any udp port 6343`
+一眼就能分辨。
+
+界面上则用 `source_type` 这个字段确认:它取 `SFLOW` / `NETFLOW` /
+`LOCAL_XDP`,三种输入进的是同一张表,按它过滤或分组就知道哪一路有数据。
+同时开 `-input local,sflow` 时更要这么看,否则本机流量会盖住"sFlow 没收到"
+这件事。
+
 ## 认证
 
 照搬 pingping 的做法:用户名密码放启动参数,没有数据库、没有注册流程。
@@ -273,22 +304,55 @@ query benchmark 决定,而不是凭经验。
 
 ## 启动参数
 
+`./ntop2ban -h` 会打印这份清单,下面按用途分组,顺带说清默认值的理由。
+
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `-addr` | `:8090` | Web 监听地址 |
-| `-input` | `local` | 输入源:`local` / `sflow` / `netflow`,逗号分隔 |
-| `-iface` | 空 | 本机抓包的网卡。XDP 模式必须指定 |
-| `-sampling` | Linux `100` / macOS `1` | 本机抓包抽样率 1/N;`1` 表示全量。macOS 默认全量的理由见上文 |
-| `-datasource` | 空(自动降级) | 强制 `xdp-native` / `xdp-generic` / `af-packet` |
-| `-sflow-listen` | `:6343` | sFlow v5 监听地址 |
-| `-netflow-listen` | `:2055` | NetFlow v5 监听地址 |
-| `-data-dir` | `./ntop2ban-data` | 数据目录 |
-| `-clickhouse-addr` | 空(托管子进程) | 外部 ClickHouse 地址 |
-| `-clickhouse-bin` | 同目录 `./clickhouse` | clickhouse 二进制路径 |
-| `-retention-days` | `90` | 明细数据保留天数 |
-| `-ip2asn` | 空 | ip2asn TSV 路径(`.tsv` 或 `.tsv.gz`) |
-| `-mmdb` | 空 | GeoLite2-City mmdb 路径;也可在界面上传 |
-| `user=` `passwd=` | 无(生成随机密码) | 逗号分隔的多账号 |
+| `-addr` | `:8090` | Web 监听地址。只想本机访问就写 `127.0.0.1:8090` |
+| `-input` | `local` | 输入源:`local`(本机抓包)/ `sflow` / `netflow`,逗号分隔可同时开 |
+| `-iface` | 空 | 本机抓包的网卡。XDP 与 macOS 的 `/dev/bpf` 都**必须**指定 |
+| `-sampling` | Linux `100` / macOS `1` | 本机抓包抽样率 1/N;`1` 为全量 |
+| `-datasource` | 空(自动降级) | 强制采集层:`xdp-native` / `xdp-generic` / `af-packet` / `bpf-device`(macOS) |
+| `-sflow-listen` | `:6343` | sFlow v5 监听地址(标准端口) |
+| `-netflow-listen` | `:2055` | NetFlow v5 监听地址(标准端口) |
+| `-data-dir` | `./ntop2ban-data` | 数据目录。托管模式下 ClickHouse 的库文件也在这里 |
+| `-clickhouse-addr` | 空(托管子进程) | 外部 ClickHouse 的 `host:9000`;给了就不再拉起子进程 |
+| `-clickhouse-bin` | 空(同目录 `./clickhouse`) | 托管用的 clickhouse 二进制路径 |
+| `-retention-days` | `90` | 明细数据保留天数,靠 ClickHouse 的 TTL 落地 |
+| `-ip2asn` | 空 | ip2asn TSV(`.tsv` / `.tsv.gz`),提供 ASN / 国家 / 组织 |
+| `-mmdb` | 空 | GeoLite2-City mmdb,额外提供城市与区域;也可在界面上传 |
+| `-version` | — | 打印版本后退出 |
+| `user=` `passwd=` | 无(生成随机密码) | 位置参数,不带 `-`;逗号分隔多账号,两边个数要一致 |
+
+几个不那么显然的:
+
+**`-iface` 什么时候是必需的。** XDP 要挂在一块具体网卡上,macOS 的
+`BIOCSETIF` 也没有"所有网卡"这种语义,所以本机抓包必须给 `-iface`。
+反过来,只收 sFlow / NetFlow 时它完全不用给 —— 那条路不碰网卡。
+
+**`-sampling` 为什么两个平台不一样。** Linux 上抽样判定在内核里由 cBPF
+完成,不命中的包根本不会拷到用户态,`100` 几乎不花钱。macOS 的 BPF 没有
+对应的随机数扩展,抽样只能在用户态做 —— 包已经拷上来了,省下的只有解析
+与聚合,而统计误差按 1/√(观测包数) 变大。省得有限、损失确定,所以 macOS
+默认全量。家用带宽下全量本来也不重。
+
+**`-datasource` 是排障用的,平时别给。** 不给时按 native → generic →
+af-packet(macOS 上是 bpf-device)逐级试,失败原因会打在启动日志里。给了
+就锁死在那一层,挂不上直接退出 —— 想确认"这台机器到底能不能上 XDP"时
+才有用。虚拟机里的虚拟网卡通常只支持 generic。
+
+**`-clickhouse-addr` 与 `-clickhouse-bin` 是二选一。** 前者留空时才会去
+拉起后者所指的二进制(默认找可执行文件同目录的 `./clickhouse`,发行大包
+里就是这么摆的)。已经有 ClickHouse 实例的话给 `-clickhouse-addr`,大包
+里那个 clickhouse 直接删掉也行。
+
+**`-retention-days` 只影响明细表。** 预聚合表(1 分钟 / 1 小时)保留更久,
+所以删掉明细之后长期趋势图还在。改小它是回收磁盘最直接的手段。
+
+**富化库两个都可以不给。** 不给就只有 IP 和端口维度,国家 / ASN / 城市
+是空的。界面「设置」页里点一下同步就会自动下载并缓存到 `-data-dir`,
+下次启动自动加载,不需要这两个参数;`-ip2asn` / `-mmdb` 是给离线机器
+预置库文件用的。
 
 ## API
 
