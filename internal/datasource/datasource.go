@@ -20,6 +20,7 @@ package datasource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -106,6 +107,41 @@ func (e *ErrUnavailable) Error() string {
 }
 func (e *ErrUnavailable) Unwrap() error { return e.Reason }
 
+// mergedFailureLines 把降级过程里攒下的失败原因整理成待打印的行,
+// 原因一字不差的层级合成一行。
+//
+// Why: xdp-native 与 xdp-generic 共用同一份 bytecode、同一套前置检查,
+// 只在 attach 的 flag 上有区别,所以它们的失败原因十有八九完全相同。
+// 原样逐条打印的结果是连着两行一模一样的话,读日志的人得先确认自己
+// 没看错、再去数到底有几级失败 —— 噪音把真正该注意的那一行盖住了。
+func mergedFailureLines(failures []error) []string {
+	var order []string
+	modesByReason := map[string][]string{}
+	for _, f := range failures {
+		reason := f.Error()
+		mode := ""
+		var un *ErrUnavailable
+		if errors.As(f, &un) {
+			reason, mode = un.Reason.Error(), string(un.Mode)
+		}
+		if _, seen := modesByReason[reason]; !seen {
+			order = append(order, reason)
+		}
+		modesByReason[reason] = append(modesByReason[reason], mode)
+	}
+
+	lines := make([]string, 0, len(order))
+	for _, reason := range order {
+		modes := modesByReason[reason]
+		if len(modes) == 1 && modes[0] == "" {
+			lines = append(lines, reason)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s 不可用:%s", strings.Join(modes, "、"), reason))
+	}
+	return lines
+}
+
 // attemptOrder 返回要依次尝试的层级。
 //
 // 候选集合由 supportedModes 给出,它按平台定义(见 open_linux.go /
@@ -135,11 +171,13 @@ func describeAttempts(errs []error) error {
 	if len(errs) == 0 {
 		return nil
 	}
+	// 与降级日志用同一套合并规则:全军覆没时更需要一眼看清到底有几种
+	// 不同的原因,而不是把同一句话读三遍。
 	var b strings.Builder
 	b.WriteString("所有观测数据源均不可用:")
-	for _, e := range errs {
+	for _, line := range mergedFailureLines(errs) {
 		b.WriteString("\n  - ")
-		b.WriteString(e.Error())
+		b.WriteString(line)
 	}
 	return fmt.Errorf("%s", b.String())
 }

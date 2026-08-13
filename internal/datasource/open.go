@@ -46,8 +46,8 @@ func Open(cfg Config, lg *log.Logger) (Source, error) {
 				// 降级要显眼:用户以为自己在跑 XDP native,实际上在
 				// generic 或 AF_PACKET 上,性能差一个数量级。
 				lg.Printf("[flow] 数据源降级为 %s", mode.Label())
-				for _, f := range failures {
-					lg.Printf("[flow]   上一级失败原因:%v", f)
+				for _, line := range mergedFailureLines(failures) {
+					lg.Printf("[flow]   %s", line)
 				}
 			} else {
 				lg.Printf("[flow] 数据源:%s", mode.Label())

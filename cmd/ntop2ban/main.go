@@ -98,9 +98,6 @@ func main() {
 		} else {
 			log.Printf("富化:ip2asn 已加载 %d 条前缀", asnDB.Size())
 		}
-	} else if !asnDB.Loaded() {
-		log.Println("富化:ASN/国家维度不可用 —— 在界面「设置」页点一下同步即可" +
-			"(内置 iptoasn 与 DB-IP 两个源,无需注册)")
 	}
 
 	cityDB := enrich.NewCityDB()
@@ -109,6 +106,15 @@ func main() {
 	// 而用户不会觉得那是正常操作。
 	if loaded := syncer.LoadCached(); len(loaded) > 0 {
 		log.Printf("富化:已从缓存加载 %v", loaded)
+	}
+
+	// 这句提示必须等到 LoadCached 之后再判断。放在它前面时,缓存里明明
+	// 有库,启动日志却先喊一句"ASN/国家维度不可用,去设置页点同步",
+	// 紧接着下一行又说"已从缓存加载 [...]" —— 自己打自己的脸,而用户
+	// 只会记住前面那句、白跑一趟设置页。
+	if !asnDB.Loaded() {
+		log.Println("富化:ASN/国家维度不可用 —— 在界面「设置」页点一下同步即可" +
+			"(内置 iptoasn 与 DB-IP 两个源,无需注册)")
 	}
 
 	mmdb := enrich.NewMMDB()
